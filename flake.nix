@@ -18,6 +18,7 @@
                 vulkan-loader
                 vulkan-volk
                 vulkan-tools
+                vulkan-validation-layers
                 vulkan-memory-allocator
                 udev
 
