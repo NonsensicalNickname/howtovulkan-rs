@@ -18,6 +18,8 @@ use ash::{
     Device, Entry, Instance,
 };
 
+use vk_mem;
+
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
 
@@ -55,7 +57,9 @@ fn main() {
     let evl = EventLoop::new().unwrap();
     evl.set_control_flow(ControlFlow::Poll);
 
-    let instance = create_instance(&entry, evl.raw_display_handle().unwrap())
+    let mut raw_display_handle = evl.raw_display_handle().unwrap();
+
+    let instance = create_instance(&entry, raw_display_handle)
         .expect("Error creating instance");
 
     let physical_device = get_physical_device(&instance);
@@ -65,7 +69,25 @@ fn main() {
     let logical_device = get_logical_device(&instance, physical_device, &device_queue)
         .expect("Error creating logical device");
 
-    // let queue = unsafe { logical_device.get_device_queue(qf_idx, 0) };
+    let queue = unsafe { logical_device.get_device_queue(qf_idx, 0) };
+
+    let alloc_create_info = vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::Auto,
+        ..Default::default()
+    };
+
+    // peruse https://github.com/ash-rs/ash/blob/master/ash-window/examples/winit.rs
+    // let sf = khr::surface::Instance::new(&entry, &instance);
+    // let surface = vk::WaylandSurfaceCreateInfoKHR {
+    //     s_type: StructureType::WAYLAND_SURFACE_CREATE_INFO_KHR,
+    //     display: &mut raw_display_handle as *mut _ as *mut c_void,
+    //     surface:,
+    //     ..Default::default()
+    // };
+    // let surface_capabilities = unsafe {
+    //     khr::surface::Instance::get_physical_device_surface_capabilities(&sf, physical_device, surface)
+    // };
+    // WaylandSurface
 
     // println!("{queue:?}");
 
