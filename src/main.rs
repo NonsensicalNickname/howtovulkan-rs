@@ -1,30 +1,33 @@
 use std::{
-    ffi::{c_void, CString},
+    ffi::{CString, c_char, c_void},
     sync::Arc,
 };
 
 use winit::{
     application::ApplicationHandler,
+    dpi::LogicalSize,
     event::WindowEvent::*,
     event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
-    raw_window_handle::{HasRawDisplayHandle, RawDisplayHandle},
+    raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle},
     window::{Window, WindowAttributes},
 };
 
 use ash::{
-    khr,
+    Device, Entry, Instance, khr,
     prelude::VkResult,
-    vk::{self, StructureType, API_VERSION_1_3, TRUE},
-    Device, Entry, Instance,
+    vk::{
+        self, API_VERSION_1_3, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR,
+        TRUE,
+    },
 };
-
-use vk_mem;
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
 
 struct AppWindow {
     window: Arc<Window>,
+    surface: Arc<vk::SurfaceKHR>,
+    surface_loader: Arc<khr::surface::Instance>,
 }
 
 impl ApplicationHandler for AppWindow {
@@ -59,8 +62,7 @@ fn main() {
 
     let mut raw_display_handle = evl.raw_display_handle().unwrap();
 
-    let instance = create_instance(&entry, raw_display_handle)
-        .expect("Error creating instance");
+    let instance = create_instance(&entry, raw_display_handle).expect("Error creating instance");
 
     let physical_device = get_physical_device(&instance);
 
@@ -76,25 +78,56 @@ fn main() {
         ..Default::default()
     };
 
-    // peruse https://github.com/ash-rs/ash/blob/master/ash-window/examples/winit.rs
-    // let sf = khr::surface::Instance::new(&entry, &instance);
-    // let surface = vk::WaylandSurfaceCreateInfoKHR {
-    //     s_type: StructureType::WAYLAND_SURFACE_CREATE_INFO_KHR,
-    //     display: &mut raw_display_handle as *mut _ as *mut c_void,
-    //     surface:,
+    let window = Arc::new(
+        evl.create_window(
+            WindowAttributes::default()
+                .with_inner_size(winit::dpi::Size::Logical(LogicalSize::new(480.0, 480.0))),
+        )
+        .unwrap(),
+    );
+
+    let surface = unsafe {
+        ash_window::create_surface(
+            &entry,
+            &instance,
+            raw_display_handle,
+            window.raw_window_handle().unwrap(),
+            None,
+        )
+        .unwrap()
+    };
+
+    let surface_loader = khr::surface::Instance::new(&entry, &instance);
+
+    let sf_caps = unsafe {
+        surface_loader
+            .get_physical_device_surface_capabilities(physical_device, surface)
+            .unwrap()
+    };
+
+    let swapchain_loader = khr::swapchain::Device::new(&instance, &logical_device);
+    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps)
+        .expect("Error creating the swapchain:");
+
+    let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
+
+    // depth stuff
+    // let depth_formats = [
+    //     vk::Format::D32_SFLOAT_S8_UINT,
+    //     vk::Format::D24_UNORM_S8_UINT,
+    // ];
+    //
+    // let depth_format = vk::Format::UNDEFINED;
+    //
+    // let swapchain = vk::SwapchainCreateInfoKHR {
+    //
     //     ..Default::default()
     // };
-    // let surface_capabilities = unsafe {
-    //     khr::surface::Instance::get_physical_device_surface_capabilities(&sf, physical_device, surface)
-    // };
-    // WaylandSurface
-
-    // println!("{queue:?}");
-
-    let window = Arc::new(evl.create_window(WindowAttributes::default()).unwrap());
 
     let mut app = AppWindow {
         window: window.clone(),
+        surface: Arc::new(surface),
+        surface_loader: Arc::new(surface_loader),
     };
 
     evl.run_app(&mut app).unwrap();
@@ -116,11 +149,16 @@ fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<
     let extensions = ash_window::enumerate_required_extensions(display_handle)
         .expect("Failed to enumerate required extensions");
 
+    let layers = [c"VK_LAYER_KHRONOS_validation"];
+    let layers_raw: Vec<*const c_char> = layers.iter().map(|raw_name| raw_name.as_ptr()).collect();
+
     let instance_info = vk::InstanceCreateInfo {
         s_type: StructureType::INSTANCE_CREATE_INFO,
         p_application_info: &app_info,
         enabled_extension_count: extensions.len() as u32,
         pp_enabled_extension_names: extensions.as_ptr(),
+        enabled_layer_count: layers_raw.len() as u32,
+        pp_enabled_layer_names: layers_raw.as_ptr(),
         ..Default::default()
     };
 
@@ -133,6 +171,9 @@ fn get_physical_device(instance: &Instance) -> vk::PhysicalDevice {
             .enumerate_physical_devices()
             .expect("Failed to enumerate physical devices")
     };
+    println!("Using: {PHYSICAL_DEVICE_IDX} from:");
+    show_physical_device_names(instance);
+
     devices[PHYSICAL_DEVICE_IDX]
 }
 
@@ -178,34 +219,10 @@ fn create_queue<'a>(
     )
 }
 
-	// VkPhysicalDeviceVulkan12Features enabledVk12Features{ 
-    //     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-    //     .descriptorIndexing = true,
-    //     .descriptorBindingVariableDescriptorCount = true,
-    //     .runtimeDescriptorArray = true,
-    //     .bufferDeviceAddress = true 
-    // };
-	// VkPhysicalDeviceVulkan13Features enabledVk13Features{
-    //     .sType = VK_STRUCTURE_TYPE_PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
-    //     .pNext = &enabledVk12Features,
-    //     .synchronization2 = true,
-    //     .dynamicRendering = true 
-    // };
-	// const std::vector<const char*> deviceExtensions{ VK_KHR_SWAPCHAIN_EXTENSION_NAME };
-	// const VkPhysicalDeviceFeatures enabledVk10Features{ .samplerAnisotropy = VK_TRUE };
-	// VkDeviceCreateInfo deviceCI{
-	// 	.sType = VK_STRUCTURE_TYPE_DEVICE_CREATE_INFO,
-	// 	.pNext = &enabledVk13Features,
-	// 	.queueCreateInfoCount = 1,
-	// 	.pQueueCreateInfos = &queueCI,
-	// 	.enabledExtensionCount = static_cast<uint32_t>(deviceExtensions.size()),
-	// 	.ppEnabledExtensionNames = deviceExtensions.data(),
-	// 	.pEnabledFeatures = &enabledVk10Features
-	// };
 fn get_logical_device(
     instance: &Instance,
     physical_device: vk::PhysicalDevice,
-    queue_create_info: &vk::DeviceQueueCreateInfo
+    queue_create_info: &vk::DeviceQueueCreateInfo,
 ) -> VkResult<Device> {
     let logical_device_extensions = [khr::swapchain::NAME];
 
@@ -235,7 +252,7 @@ fn get_logical_device(
         s_type: StructureType::DEVICE_CREATE_INFO,
         p_next: &mut enabled_vk13_features as *mut _ as *mut c_void,
         queue_create_info_count: 1_u32,
-        p_queue_create_infos: queue_create_info,
+        p_queue_create_infos: queue_create_info, // the bingus
         enabled_extension_count: logical_device_extensions.len() as u32,
         pp_enabled_extension_names: logical_device_extensions.as_ptr() as *const *const i8,
         p_enabled_features: &enabled_vk10_features,
@@ -243,6 +260,31 @@ fn get_logical_device(
     };
 
     unsafe { instance.create_device(physical_device, &logical_device_info, None) }
+}
+
+fn create_swapchain(
+    swapchain_loader: &khr::swapchain::Device,
+    surface: SurfaceKHR,
+    sf_caps: &SurfaceCapabilitiesKHR,
+) -> VkResult<SwapchainKHR> {
+    let image_format = vk::Format::B8G8R8A8_SRGB;
+
+    let swapchain_info = vk::SwapchainCreateInfoKHR {
+        s_type: StructureType::SWAPCHAIN_CREATE_INFO_KHR,
+        surface,
+        min_image_count: sf_caps.min_image_count,
+        image_format,
+        image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        image_extent: sf_caps.current_extent,
+        image_array_layers: 1_u32,
+        image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+        composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+        present_mode: vk::PresentModeKHR::FIFO,
+        ..Default::default()
+    };
+
+    unsafe { swapchain_loader.create_swapchain(&swapchain_info, None) }
 }
 
 // TODO: alongside a flag for this, add option to manually set device
@@ -270,4 +312,5 @@ fn show_physical_device_names(instance: &Instance) {
                 .trim_matches(char::from(0))
         );
     }
+    println!();
 }
