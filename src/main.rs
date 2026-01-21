@@ -1,6 +1,5 @@
 use std::{
-    ffi::{CString, c_char, c_void},
-    sync::Arc,
+    ffi::{CString, c_char, c_void}, num::NonZeroU32, sync::Arc
 };
 
 use winit::{
@@ -16,13 +15,13 @@ use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
     vk::{
-        self, API_VERSION_1_3, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR,
-        TRUE,
+        self, API_VERSION_1_3, Extent2D, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
     },
 };
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
+const MAKE_PRE_VK_SURFACE: bool = false;
 
 struct AppWindow {
     window: Arc<Window>,
@@ -45,7 +44,7 @@ impl ApplicationHandler for AppWindow {
                 event_loop.exit();
             }
             RedrawRequested => {
-                println!("redraw pls");
+                // println!("redraw pls");
                 // call for another redraw immediately
                 // self.window.as_ref().request_redraw();
             }
@@ -81,16 +80,35 @@ fn main() {
     let window = Arc::new(
         evl.create_window(
             WindowAttributes::default()
-                .with_inner_size(winit::dpi::Size::Logical(LogicalSize::new(480.0, 480.0))),
+                .with_inner_size(winit::dpi::Size::Logical(LogicalSize::new(480.0, 480.0)))
+                ,
         )
         .unwrap(),
     );
+
+    // make a softbuffer surface and draw to it HERE so that the window has a size and so forth
+    if MAKE_PRE_VK_SURFACE
+    {
+        let sbuf_ctx = softbuffer::Context::new(evl.owned_display_handle()).unwrap();
+        let mut sbuf_surface = softbuffer::Surface::new(&sbuf_ctx, window.clone()).unwrap();
+        let win_size = window.inner_size();
+        sbuf_surface
+            .resize(
+                NonZeroU32::new(win_size.width).unwrap(),
+                NonZeroU32::new(win_size.height).unwrap(),
+            )
+            .unwrap();
+        let mut buffer = sbuf_surface.buffer_mut().unwrap();
+        buffer.fill_with(|| 255 | 255 << 8 | 255 << 16); 
+
+        buffer.present().unwrap();
+    }
 
     let surface = unsafe {
         ash_window::create_surface(
             &entry,
             &instance,
-            raw_display_handle,
+            window.raw_display_handle().unwrap(),
             window.raw_window_handle().unwrap(),
             None,
         )
@@ -105,8 +123,10 @@ fn main() {
             .unwrap()
     };
 
+    let win_size = window.inner_size().to_logical::<u32>(1.0);
+
     let swapchain_loader = khr::swapchain::Device::new(&instance, &logical_device);
-    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps)
+    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, (win_size.width, win_size.height))
         .expect("Error creating the swapchain:");
 
     let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
@@ -266,6 +286,7 @@ fn create_swapchain(
     swapchain_loader: &khr::swapchain::Device,
     surface: SurfaceKHR,
     sf_caps: &SurfaceCapabilitiesKHR,
+    win_size: (u32, u32),
 ) -> VkResult<SwapchainKHR> {
     let image_format = vk::Format::B8G8R8A8_SRGB;
 
@@ -275,7 +296,8 @@ fn create_swapchain(
         min_image_count: sf_caps.min_image_count,
         image_format,
         image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-        image_extent: sf_caps.current_extent,
+        // wayland making me cry
+        image_extent: Extent2D {width: win_size.0, height: win_size.1},//sf_caps.current_extent,
         image_array_layers: 1_u32,
         image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
         pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
