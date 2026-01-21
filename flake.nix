@@ -19,9 +19,11 @@
                 vulkan-volk
                 vulkan-tools
                 vulkan-validation-layers
+                vulkan-tools-lunarg
                 vulkan-memory-allocator
                 udev
 
+                stdenv.cc.cc.lib
                 # raylib
                 # glfw
                 # cmake
@@ -37,6 +39,8 @@
 
             LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
 
+            VULKAN_SDK = "${pkgs.vulkan-validation-layers}/share/vulkan/implicit_layer.d";
+            VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
             # LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
 
             # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
