@@ -1,56 +1,45 @@
-use std::{
-    ffi::{CString, c_char, c_void}, num::NonZeroU32, sync::Arc
-};
+mod window;
+mod model;
+
+use window::AppWindow;
 
 use winit::{
-    application::ApplicationHandler,
-    dpi::LogicalSize,
-    event::WindowEvent::*,
-    event_loop::{ActiveEventLoop, ControlFlow, EventLoop},
+    event_loop::{ControlFlow, EventLoop},
     raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle},
-    window::{Window, WindowAttributes},
+    dpi::LogicalSize,
+    window::WindowAttributes,
 };
+
+use std::{
+    ffi::{CString, c_char, c_void},
+    num::NonZeroU32,
+    sync::Arc,
+    ptr::copy_nonoverlapping,
+};
+
+use core::slice::from_raw_parts;
+
+use vk_mem::{Alloc, AllocationCreateInfo, Allocator};
 
 use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
     vk::{
-        self, API_VERSION_1_3, Extent2D, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
+        self, API_VERSION_1_3, Buffer, CommandBuffer, Extent2D, Extent3D, Format, Image, ImageSubresourceRange, ImageView, PhysicalDevice, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
     },
 };
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
 const MAKE_PRE_VK_SURFACE: bool = false;
+const DISPLAY_SCALING: f64 = 1.0;
+const MAX_FRAMES_IN_FLIGHT: usize= 2;
 
-struct AppWindow {
-    window: Arc<Window>,
-    surface: Arc<vk::SurfaceKHR>,
-    surface_loader: Arc<khr::surface::Instance>,
-}
-
-impl ApplicationHandler for AppWindow {
-    fn resumed(&mut self, event_loop: &ActiveEventLoop) {}
-
-    fn window_event(
-        &mut self,
-        event_loop: &ActiveEventLoop,
-        window_id: winit::window::WindowId,
-        event: winit::event::WindowEvent,
-    ) {
-        match event {
-            CloseRequested => {
-                println!("Application closed");
-                event_loop.exit();
-            }
-            RedrawRequested => {
-                // println!("redraw pls");
-                // call for another redraw immediately
-                // self.window.as_ref().request_redraw();
-            }
-            _ => (),
-        }
-    }
+struct ShaderData {
+    proj: glm::Mat4,
+    view: glm::Mat4,
+    model: [glm::Mat4; 3],
+    light_pos: glm::Vec4,
 }
 
 fn main() {
@@ -72,23 +61,23 @@ fn main() {
 
     let queue = unsafe { logical_device.get_device_queue(qf_idx, 0) };
 
-    let alloc_create_info = vk_mem::AllocationCreateInfo {
-        usage: vk_mem::MemoryUsage::Auto,
-        ..Default::default()
-    };
+    let alloc_create_info =
+        vk_mem::AllocatorCreateInfo::new(&instance, &logical_device, physical_device);
+
+    let vk_alloc = unsafe { vk_mem::Allocator::new(alloc_create_info).unwrap() };
+
+    // lettuce begin
 
     let window = Arc::new(
         evl.create_window(
             WindowAttributes::default()
-                .with_inner_size(winit::dpi::Size::Logical(LogicalSize::new(480.0, 480.0)))
-                ,
+                .with_inner_size(winit::dpi::Size::Logical(LogicalSize::new(480.0, 480.0))),
         )
         .unwrap(),
     );
 
-    // make a softbuffer surface and draw to it HERE so that the window has a size and so forth
-    if MAKE_PRE_VK_SURFACE
-    {
+    // may or may not need to make and draw to a surface before the vulkan surface...
+    if MAKE_PRE_VK_SURFACE {
         let sbuf_ctx = softbuffer::Context::new(evl.owned_display_handle()).unwrap();
         let mut sbuf_surface = softbuffer::Surface::new(&sbuf_ctx, window.clone()).unwrap();
         let win_size = window.inner_size();
@@ -99,7 +88,7 @@ fn main() {
             )
             .unwrap();
         let mut buffer = sbuf_surface.buffer_mut().unwrap();
-        buffer.fill_with(|| 255 | 255 << 8 | 255 << 16); 
+        buffer.fill_with(|| 255 | 255 << 8 | 255 << 16);
 
         buffer.present().unwrap();
     }
@@ -123,26 +112,41 @@ fn main() {
             .unwrap()
     };
 
-    let win_size = window.inner_size().to_logical::<u32>(1.0);
+    let win_size = {
+        let ls = window.inner_size().to_logical::<u32>(DISPLAY_SCALING);
+        (ls.width, ls.height)
+    };
 
     let swapchain_loader = khr::swapchain::Device::new(&instance, &logical_device);
-    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, (win_size.width, win_size.height))
+    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, win_size)
         .expect("Error creating the swapchain:");
 
     let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
 
-    // depth stuff
-    // let depth_formats = [
-    //     vk::Format::D32_SFLOAT_S8_UINT,
-    //     vk::Format::D24_UNORM_S8_UINT,
-    // ];
-    //
-    // let depth_format = vk::Format::UNDEFINED;
-    //
-    // let swapchain = vk::SwapchainCreateInfoKHR {
-    //
-    //     ..Default::default()
-    // };
+    let (depth_image, mut depth_image_alloc, depth_image_view) = get_depth_image(
+        &instance, &logical_device, physical_device, win_size, &vk_alloc).expect("Error creating an image");
+
+    let (model_vertices, model_indices) = model::load();
+
+    let v_buf_size = size_of::<model::Vertex>() * model_vertices.len();
+    let i_buf_size = size_of::<u16>() * model_indices.len();
+
+    let (buffer, mut buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
+        .expect("Error creating the buffer:");
+
+    let buffer_ptr = unsafe { vk_alloc.map_memory(&mut buffer_alloc).unwrap() };
+
+    let v_ptr = &model_vertices as *const _ as *const u8;
+    let i_ptr = &model_indices as *const _ as *const u8;
+
+    unsafe { 
+        copy_nonoverlapping(v_ptr, buffer_ptr, model_vertices.len());
+        copy_nonoverlapping(i_ptr, buffer_ptr.add(v_buf_size), model_indices.len());
+        vk_alloc.unmap_memory(&mut buffer_alloc);
+    };
+
+    let shader_data_buffers: [ShaderData; MAX_FRAMES_IN_FLIGHT];
+    let command_buffers: [CommandBuffer; MAX_FRAMES_IN_FLIGHT];
 
     let mut app = AppWindow {
         window: window.clone(),
@@ -286,7 +290,7 @@ fn create_swapchain(
     swapchain_loader: &khr::swapchain::Device,
     surface: SurfaceKHR,
     sf_caps: &SurfaceCapabilitiesKHR,
-    win_size: (u32, u32),
+    (width, height): (u32, u32),
 ) -> VkResult<SwapchainKHR> {
     let image_format = vk::Format::B8G8R8A8_SRGB;
 
@@ -296,8 +300,7 @@ fn create_swapchain(
         min_image_count: sf_caps.min_image_count,
         image_format,
         image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-        // wayland making me cry
-        image_extent: Extent2D {width: win_size.0, height: win_size.1},//sf_caps.current_extent,
+        image_extent: Extent2D { width, height },
         image_array_layers: 1_u32,
         image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
         pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
@@ -307,6 +310,120 @@ fn create_swapchain(
     };
 
     unsafe { swapchain_loader.create_swapchain(&swapchain_info, None) }
+}
+
+fn get_depth_image(
+    instance: &Instance,
+    logical_device: &Device,
+    physical_device: PhysicalDevice,
+    (width, height): (u32, u32),
+    vk_alloc: &Allocator,
+) -> VkResult<(Image, vk_mem::Allocation, ImageView)> {
+    let depth_formats = [
+        vk::Format::D32_SFLOAT_S8_UINT,
+        vk::Format::D24_UNORM_S8_UINT,
+    ];
+
+    let mut depth_format = vk::Format::UNDEFINED;
+
+    for format in depth_formats {
+        let mut format_props = vk::FormatProperties2 {
+            s_type: StructureType::FORMAT_PROPERTIES_2,
+            ..Default::default()
+        };
+        unsafe {
+            instance.get_physical_device_format_properties2(
+                physical_device,
+                format,
+                &mut format_props,
+            );
+        };
+        if (format_props.format_properties.optimal_tiling_features
+            & vk::FormatFeatureFlags::DEPTH_STENCIL_ATTACHMENT)
+            .as_raw()
+            != 0_u32
+        {
+            depth_format = format;
+            break;
+        }
+    }
+
+    let depth_image_info = vk::ImageCreateInfo {
+        s_type: StructureType::IMAGE_CREATE_INFO,
+        image_type: vk::ImageType::TYPE_2D,
+        format: depth_format,
+        extent: Extent3D {
+            width,
+            height,
+            depth: 1,
+        },
+        mip_levels: 1_u32,
+        array_layers: 1_u32,
+        samples: vk::SampleCountFlags::TYPE_1,
+        tiling: vk::ImageTiling::OPTIMAL,
+        usage: vk::ImageUsageFlags::DEPTH_STENCIL_ATTACHMENT,
+        initial_layout: vk::ImageLayout::UNDEFINED,
+        ..Default::default()
+    };
+
+    let alloc_info = vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::Auto,
+        flags: vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
+        ..Default::default()
+    };
+
+    let depth_image = unsafe {
+        vk_alloc.create_image(
+            &depth_image_info,
+            &alloc_info
+        )?
+    };
+
+    let view_info = vk::ImageViewCreateInfo {
+        s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
+        image: depth_image.0,
+        view_type: vk::ImageViewType::TYPE_2D,
+        format: depth_format,
+        subresource_range: ImageSubresourceRange {
+            aspect_mask: vk::ImageAspectFlags::DEPTH,
+            level_count: 1_u32,
+            layer_count: 1_u32,
+            ..Default::default()
+        },
+        ..Default::default()
+    };
+
+    let image_view = unsafe {
+        logical_device.create_image_view(&view_info, None)?
+    };
+
+    Ok((depth_image.0, depth_image.1, image_view))
+}
+
+fn get_buffer(vk_alloc: &Allocator, size: u64) 
+-> VkResult<(Buffer, vk_mem::Allocation)>
+{
+    let buffer_info = vk::BufferCreateInfo {
+        s_type: StructureType::BUFFER_CREATE_INFO,
+        size,
+        usage: vk::BufferUsageFlags::VERTEX_BUFFER | vk::BufferUsageFlags::INDEX_BUFFER,
+        ..Default::default()
+    };
+
+    let alloc_info = vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::Auto,
+        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+        | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
+        | vk_mem::AllocationCreateFlags::MAPPED,
+        ..Default::default()
+    };
+
+    Ok(unsafe {
+        vk_alloc.create_buffer(
+            &buffer_info,
+            &alloc_info
+        )?
+    })
 }
 
 // TODO: alongside a flag for this, add option to manually set device
