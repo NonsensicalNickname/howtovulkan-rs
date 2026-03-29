@@ -26,7 +26,9 @@ pub fn load() -> (Vec<Vertex>, Vec<u16>) {
     let mut vertices: Vec<Vertex> = Vec::new();
     let mut indices: Vec<u16> = Vec::new();
 
-    assert!(model_indices.len() == m_normal_indices.len() && model_indices.len() == m_tex_indices.len());
+    assert!(
+        model_indices.len() == m_normal_indices.len() && model_indices.len() == m_tex_indices.len()
+    );
 
     let mut idx: usize = 0;
     while idx < model_indices.len() {
@@ -34,13 +36,19 @@ pub fn load() -> (Vec<Vertex>, Vec<u16>) {
         let n_idx = m_normal_indices[idx] as usize;
         let t_idx = m_tex_indices[idx] as usize;
 
-        vertices.push(
-            Vertex {
-            pos: glm::vec3(m_verts[v_idx * 3], -m_verts[v_idx * 3 + 1], m_verts[v_idx * 3 + 2]),
-            normal: glm::vec3(m_normals[n_idx * 3], -m_normals[n_idx * 3 + 1], m_normals[n_idx * 3  + 2]),
+        vertices.push(Vertex {
+            pos: glm::vec3(
+                m_verts[v_idx * 3],
+                -m_verts[v_idx * 3 + 1],
+                m_verts[v_idx * 3 + 2],
+            ),
+            normal: glm::vec3(
+                m_normals[n_idx * 3],
+                -m_normals[n_idx * 3 + 1],
+                m_normals[n_idx * 3 + 2],
+            ),
             uv: glm::vec2(m_tex[t_idx * 2], 1.0 - m_tex[t_idx * 2 + 1]),
-            }
-        );
+        });
 
         indices.push(idx as u16);
         idx += 1;

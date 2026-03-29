@@ -1,12 +1,10 @@
 use std::sync::Arc;
 
-use ash::{vk, khr};
+use ash::{khr, vk};
 
 use winit::{
-    application::ApplicationHandler,
-    event::WindowEvent::*,
-    event_loop::ActiveEventLoop,
-    window::Window, 
+    application::ApplicationHandler, event::WindowEvent::*, event_loop::ActiveEventLoop,
+    window::Window,
 };
 
 pub struct AppWindow {
