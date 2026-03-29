@@ -11,21 +11,16 @@ use winit::{
 };
 
 use std::{
-    ffi::{CString, c_char, c_void},
-    num::NonZeroU32,
-    sync::Arc,
-    ptr::copy_nonoverlapping,
+    ffi::{CString, c_char, c_void}, mem::{MaybeUninit, transmute}, num::NonZeroU32, ptr::copy_nonoverlapping, sync::Arc
 };
 
-use core::slice::from_raw_parts;
-
-use vk_mem::{Alloc, AllocationCreateInfo, Allocator};
+use vk_mem::{Alloc, Allocation, AllocationCreateInfo, AllocationInfo, Allocator};
 
 use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
     vk::{
-        self, API_VERSION_1_3, Buffer, CommandBuffer, Extent2D, Extent3D, Format, Image, ImageSubresourceRange, ImageView, PhysicalDevice, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
+        self, API_VERSION_1_3, Buffer, CommandBuffer, DeviceAddress, Extent2D, Extent3D, Format, Image, ImageSubresourceRange, ImageView, PhysicalDevice, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
     },
 };
 
@@ -40,6 +35,14 @@ struct ShaderData {
     view: glm::Mat4,
     model: [glm::Mat4; 3],
     light_pos: glm::Vec4,
+    selected: u32,
+}
+
+struct ShaderDataBuffer {
+	alloc: Allocation,
+    alloc_info: AllocationInfo,
+    buffer: Buffer,
+    device_address: DeviceAddress,
 }
 
 fn main() {
@@ -50,24 +53,32 @@ fn main() {
 
     let mut raw_display_handle = evl.raw_display_handle().unwrap();
 
+    println!("Creating instance...");
     let instance = create_instance(&entry, raw_display_handle).expect("Error creating instance");
 
+    println!("Creating physical device...");
     let physical_device = get_physical_device(&instance);
 
+    println!("Creating queue...");
     let (device_queue, qf_idx) = create_queue(&instance, &physical_device);
 
+    println!("Creating logical device...");
     let logical_device = get_logical_device(&instance, physical_device, &device_queue)
         .expect("Error creating logical device");
 
     let queue = unsafe { logical_device.get_device_queue(qf_idx, 0) };
 
-    let alloc_create_info =
+    println!("Creating vulkan allocator...");
+    let mut alloc_create_info =
         vk_mem::AllocatorCreateInfo::new(&instance, &logical_device, physical_device);
+
+    alloc_create_info.flags = vk_mem::AllocatorCreateFlags::BUFFER_DEVICE_ADDRESS;
 
     let vk_alloc = unsafe { vk_mem::Allocator::new(alloc_create_info).unwrap() };
 
     // lettuce begin
 
+    println!("Creating window...");
     let window = Arc::new(
         evl.create_window(
             WindowAttributes::default()
@@ -93,6 +104,7 @@ fn main() {
         buffer.present().unwrap();
     }
 
+    println!("Creating surface...");
     let surface = unsafe {
         ash_window::create_surface(
             &entry,
@@ -117,6 +129,7 @@ fn main() {
         (ls.width, ls.height)
     };
 
+    println!("Creating swapchain...");
     let swapchain_loader = khr::swapchain::Device::new(&instance, &logical_device);
     let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, win_size)
         .expect("Error creating the swapchain:");
@@ -134,19 +147,21 @@ fn main() {
     let (buffer, mut buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
         .expect("Error creating the buffer:");
 
-    let buffer_ptr = unsafe { vk_alloc.map_memory(&mut buffer_alloc).unwrap() };
+    let buffer_mapped_ptr = vk_alloc.get_allocation_info(&buffer_alloc).mapped_data;
 
-    let v_ptr = &model_vertices as *const _ as *const u8;
-    let i_ptr = &model_indices as *const _ as *const u8;
-
+    println!("Copying mesh into VRAM...");
+    let vertices_ptr = &model_vertices as *const _ as *const c_void;
+    let indices_ptr = &model_indices as *const _ as *const c_void;
     unsafe { 
-        copy_nonoverlapping(v_ptr, buffer_ptr, model_vertices.len());
-        copy_nonoverlapping(i_ptr, buffer_ptr.add(v_buf_size), model_indices.len());
-        vk_alloc.unmap_memory(&mut buffer_alloc);
+        copy_nonoverlapping(vertices_ptr, buffer_mapped_ptr, model_vertices.len());
+        copy_nonoverlapping(indices_ptr, buffer_mapped_ptr.add(model_vertices.len()), model_indices.len());
+        //vk_alloc.unmap_memory(&mut buffer_alloc);
     };
 
-    let shader_data_buffers: [ShaderData; MAX_FRAMES_IN_FLIGHT];
-    let command_buffers: [CommandBuffer; MAX_FRAMES_IN_FLIGHT];
+
+    let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
+    let mut command_buffers: [CommandBuffer; MAX_FRAMES_IN_FLIGHT];
+
 
     let mut app = AppWindow {
         window: window.clone(),
@@ -424,6 +439,44 @@ fn get_buffer(vk_alloc: &Allocator, size: u64)
             &alloc_info
         )?
     })
+}
+
+fn init_shader_data_buffers(vk_alloc: &Allocator, logical_device: &Device) -> [ShaderDataBuffer; MAX_FRAMES_IN_FLIGHT] {
+    let mut shader_data_buffers: [MaybeUninit<ShaderDataBuffer>; MAX_FRAMES_IN_FLIGHT] = [const { MaybeUninit::uninit() }; MAX_FRAMES_IN_FLIGHT];
+    
+    for elem in &mut shader_data_buffers[..] {
+        let buffer_info = vk::BufferCreateInfo {
+            s_type: StructureType::BUFFER_CREATE_INFO,
+            size: size_of::<ShaderData>() as u64,
+            usage: vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+            ..Default::default()
+        };
+
+        let alloc_info = vk_mem::AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::Auto,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+            | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
+            | vk_mem::AllocationCreateFlags::MAPPED,
+            ..Default::default()
+        };
+
+        let (buffer, alloc) = unsafe { vk_alloc.create_buffer(
+            &buffer_info,
+            &alloc_info
+        ).unwrap()};
+
+        let buffer_device_address_info = vk::BufferDeviceAddressInfo {
+            s_type: StructureType::BUFFER_DEVICE_ADDRESS_INFO,
+            buffer, 
+            ..Default::default()
+        };
+
+        let device_address = unsafe { logical_device.get_buffer_device_address(&buffer_device_address_info) };
+
+        elem.write(ShaderDataBuffer { alloc, alloc_info: vk_alloc.get_allocation_info(&alloc), buffer, device_address });
+    }
+
+    unsafe { transmute::<_, [ShaderDataBuffer; MAX_FRAMES_IN_FLIGHT]>(shader_data_buffers) }
 }
 
 // TODO: alongside a flag for this, add option to manually set device
