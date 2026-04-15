@@ -11,6 +11,8 @@
         # dependencies per raylib-rs
         devShells."x86_64-linux".default = pkgs.mkShell rec {
             buildInputs = with pkgs; [
+                ktx-tools
+
                 libxkbcommon
                 wayland
 

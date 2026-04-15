@@ -1,4 +1,8 @@
+#![feature(array_try_map)]
+
+mod gl_format;
 mod model;
+mod vk_format;
 mod window;
 
 use window::AppWindow;
@@ -11,8 +15,8 @@ use winit::{
 };
 
 use std::{
+    array,
     ffi::{CString, c_char, c_void},
-    mem::{MaybeUninit, transmute},
     num::NonZeroU32,
     ptr::copy_nonoverlapping,
     sync::Arc,
@@ -24,11 +28,10 @@ use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
     vk::{
-        self, API_VERSION_1_3, Buffer, CommandBuffer, DeviceAddress, Extent2D, Extent3D, Format,
-        Image, ImageSubresourceRange, ImageView, PhysicalDevice, StructureType,
-        SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE,
+        self, API_VERSION_1_3, Buffer, CommandBuffer, CommandBufferAllocateInfo, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo, DeviceAddress, Extent2D, Extent3D, Fence, FenceCreateFlags, FenceCreateInfo, Format, Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageUsageFlags, ImageView, PhysicalDevice, SampleCountFlags, Semaphore, SemaphoreCreateInfo, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
     },
 };
+use ktx::{Ktx, KtxInfo, include_ktx};
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
@@ -175,13 +178,25 @@ fn main() {
     };
 
     let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
-    let mut command_buffers: [CommandBuffer; MAX_FRAMES_IN_FLIGHT];
+
+    let mut render_semaphores = Vec::<Semaphore>::with_capacity(swapchain_images.len());
+    let (fences, present_semaphores) = init_sync_objects(
+        &logical_device,
+        swapchain_images.len(),
+        &mut render_semaphores,
+    )
+    .expect("Could not create synchronisation objects");
+
+    let (mut command_pool, mut command_buffers) = create_command_buffers(&logical_device, qf_idx)
+        .expect("Could not create command pool or buffers");
 
     let mut app = AppWindow {
         window: window.clone(),
         surface: Arc::new(surface),
         surface_loader: Arc::new(surface_loader),
     };
+
+    load_tex();
 
     evl.run_app(&mut app).unwrap();
 }
@@ -445,25 +460,22 @@ fn init_shader_data_buffers(
     vk_alloc: &Allocator,
     logical_device: &Device,
 ) -> [ShaderDataBuffer; MAX_FRAMES_IN_FLIGHT] {
-    let mut shader_data_buffers: [MaybeUninit<ShaderDataBuffer>; MAX_FRAMES_IN_FLIGHT] =
-        [const { MaybeUninit::uninit() }; MAX_FRAMES_IN_FLIGHT];
+    let buffer_info = vk::BufferCreateInfo {
+        s_type: StructureType::BUFFER_CREATE_INFO,
+        size: size_of::<ShaderData>() as u64,
+        usage: vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        ..Default::default()
+    };
 
-    for elem in &mut shader_data_buffers[..] {
-        let buffer_info = vk::BufferCreateInfo {
-            s_type: StructureType::BUFFER_CREATE_INFO,
-            size: size_of::<ShaderData>() as u64,
-            usage: vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
-            ..Default::default()
-        };
+    let alloc_info = vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::Auto,
+        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+            | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
+            | vk_mem::AllocationCreateFlags::MAPPED,
+        ..Default::default()
+    };
 
-        let alloc_info = vk_mem::AllocationCreateInfo {
-            usage: vk_mem::MemoryUsage::Auto,
-            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
-                | vk_mem::AllocationCreateFlags::MAPPED,
-            ..Default::default()
-        };
-
+    array::from_fn(|_| {
         let (buffer, alloc) = unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info).unwrap() };
 
         let buffer_device_address_info = vk::BufferDeviceAddressInfo {
@@ -475,15 +487,101 @@ fn init_shader_data_buffers(
         let device_address =
             unsafe { logical_device.get_buffer_device_address(&buffer_device_address_info) };
 
-        elem.write(ShaderDataBuffer {
+        ShaderDataBuffer {
             alloc,
             alloc_info: vk_alloc.get_allocation_info(&alloc),
             buffer,
             device_address,
-        });
+        }
+    })
+}
+
+fn init_sync_objects(
+    logical_device: &Device,
+    n_swapchain_images: usize,
+    render_semaphores: &mut Vec<Semaphore>,
+) -> VkResult<(
+    [Fence; MAX_FRAMES_IN_FLIGHT],
+    [Semaphore; MAX_FRAMES_IN_FLIGHT],
+)> {
+    let semaphore_create_info = SemaphoreCreateInfo {
+        s_type: StructureType::SEMAPHORE_CREATE_INFO,
+        ..Default::default()
+    };
+
+    let fence_create_info = FenceCreateInfo {
+        s_type: StructureType::FENCE_CREATE_INFO,
+        flags: FenceCreateFlags::SIGNALED,
+        ..Default::default()
+    };
+
+    let fences: [Fence; MAX_FRAMES_IN_FLIGHT] =
+        array::from_fn(|_| unsafe { logical_device.create_fence(&fence_create_info, None) })
+            .try_map(|i| i)?;
+
+    let present_semaphores: [Semaphore; MAX_FRAMES_IN_FLIGHT] = array::from_fn(|_| unsafe {
+        logical_device.create_semaphore(&semaphore_create_info, None)
+    })
+    .try_map(|i| i)?;
+
+    render_semaphores.resize(n_swapchain_images, Semaphore::null());
+
+    for semaphore in render_semaphores {
+        *semaphore = unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }?;
     }
 
-    unsafe { transmute::<_, [ShaderDataBuffer; MAX_FRAMES_IN_FLIGHT]>(shader_data_buffers) }
+    Ok((fences, present_semaphores))
+}
+
+fn create_command_buffers(
+    logical_device: &Device,
+    qf_idx: u32,
+) -> VkResult<(CommandPool, Vec<CommandBuffer>)> {
+    let command_pool_create_info = CommandPoolCreateInfo {
+        s_type: StructureType::COMMAND_POOL_CREATE_INFO,
+        flags: CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+        queue_family_index: qf_idx,
+        ..Default::default()
+    };
+
+    let command_pool =
+        unsafe { logical_device.create_command_pool(&command_pool_create_info, None)? };
+
+    let command_buffer_alloc_info = CommandBufferAllocateInfo {
+        s_type: StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+        command_pool,
+        command_buffer_count: MAX_FRAMES_IN_FLIGHT as u32,
+        ..Default::default()
+    };
+
+    let command_buffers =
+        unsafe { logical_device.allocate_command_buffers(&command_buffer_alloc_info)? };
+
+    Ok((command_pool, command_buffers))
+}
+
+fn load_tex() {
+    let mut textures: Vec<Ktx<_>> = vec![
+        include_ktx!("../assets/suzanne0.ktx"),
+        include_ktx!("../assets/suzanne1.ktx"),
+        include_ktx!("../assets/suzanne2.ktx"),
+    ];
+
+    for tex in textures {
+        let texture_img_create_info = ImageCreateInfo {
+            s_type: StructureType::IMAGE_CREATE_INFO,
+            image_type: vk::ImageType::TYPE_2D,
+            format: vk_format::get_vk_format(tex).unwrap(),
+            extent: Extent3D { width: tex.pixel_width(), height: tex.pixel_height(), depth: 1 },
+            mip_levels: tex.mipmap_levels(),
+            array_layers: 1,
+            samples: SampleCountFlags::TYPE_1,
+            tiling: ImageTiling::OPTIMAL,
+            usage: ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::SAMPLED,
+            initial_layout: ImageLayout::UNDEFINED,
+            ..Default::default()
+        };
+    }
 }
 
 // TODO: alongside a flag for this, add option to manually set device
