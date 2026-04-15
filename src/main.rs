@@ -22,16 +22,24 @@ use std::{
     sync::Arc,
 };
 
-use vk_mem::{Alloc, Allocation, AllocationCreateInfo, AllocationInfo, Allocator};
+use vk_mem::{
+    Alloc, Allocation, AllocationCreateFlags, AllocationCreateInfo, AllocationInfo, Allocator,
+};
 
 use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
     vk::{
-        self, API_VERSION_1_3, Buffer, CommandBuffer, CommandBufferAllocateInfo, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo, DeviceAddress, Extent2D, Extent3D, Fence, FenceCreateFlags, FenceCreateInfo, Format, Image, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling, ImageUsageFlags, ImageView, PhysicalDevice, SampleCountFlags, Semaphore, SemaphoreCreateInfo, StructureType, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE
+        self, API_VERSION_1_3, Buffer, BufferCreateInfo, BufferUsageFlags, CommandBuffer,
+        CommandBufferAllocateInfo, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo,
+        DeviceAddress, Extent2D, Extent3D, Fence, FenceCreateFlags, FenceCreateInfo, Format, Image,
+        ImageAspectFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling,
+        ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, PhysicalDevice,
+        SampleCountFlags, Sampler, Semaphore, SemaphoreCreateInfo, StructureType,
+        SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE,
     },
 };
-use ktx::{Ktx, KtxInfo, include_ktx};
+use ktx::{Ktx, KtxInfo, include_ktx, read::Textures};
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
@@ -52,6 +60,13 @@ struct ShaderDataBuffer {
     alloc_info: AllocationInfo,
     buffer: Buffer,
     device_address: DeviceAddress,
+}
+
+struct Texture {
+    alloc: Allocation,
+    image: Image,
+    view: ImageView,
+    sampler: Sampler,
 }
 
 fn main() {
@@ -159,7 +174,7 @@ fn main() {
     let v_buf_size = size_of::<model::Vertex>() * model_vertices.len();
     let i_buf_size = size_of::<u16>() * model_indices.len();
 
-    let (buffer, mut buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
+    let (buffer, buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
         .expect("Error creating the buffer:");
 
     let buffer_mapped_ptr = vk_alloc.get_allocation_info(&buffer_alloc).mapped_data;
@@ -196,7 +211,7 @@ fn main() {
         surface_loader: Arc::new(surface_loader),
     };
 
-    load_tex();
+    load_tex(&vk_alloc, &logical_device);
 
     evl.run_app(&mut app).unwrap();
 }
@@ -560,19 +575,32 @@ fn create_command_buffers(
     Ok((command_pool, command_buffers))
 }
 
-fn load_tex() {
-    let mut textures: Vec<Ktx<_>> = vec![
+fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
+    let mut texture_files: Vec<Ktx<_>> = vec![
         include_ktx!("../assets/suzanne0.ktx"),
         include_ktx!("../assets/suzanne1.ktx"),
         include_ktx!("../assets/suzanne2.ktx"),
     ];
 
-    for tex in textures {
+    let mut textures: Vec<Texture> = Vec::new();
+
+    for tex in texture_files {
+        // iunno why the ktx crate doesnt just expose the raw data
+        let tex_data_layers: Vec<&[u8]> = tex.textures().collect();
+        let mut tex_data: Vec<u8> = Vec::new();
+        for layer in tex_data_layers {
+            tex_data = [&tex_data, layer].concat();
+        }
+
         let texture_img_create_info = ImageCreateInfo {
             s_type: StructureType::IMAGE_CREATE_INFO,
             image_type: vk::ImageType::TYPE_2D,
             format: vk_format::get_vk_format(tex).unwrap(),
-            extent: Extent3D { width: tex.pixel_width(), height: tex.pixel_height(), depth: 1 },
+            extent: Extent3D {
+                width: tex.pixel_width(),
+                height: tex.pixel_height(),
+                depth: 1,
+            },
             mip_levels: tex.mipmap_levels(),
             array_layers: 1,
             samples: SampleCountFlags::TYPE_1,
@@ -581,7 +609,62 @@ fn load_tex() {
             initial_layout: ImageLayout::UNDEFINED,
             ..Default::default()
         };
+
+        let texture_img_alloc_info = AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::Auto,
+            ..Default::default()
+        };
+
+        let (image, image_alloc) =
+            unsafe { vk_alloc.create_image(&texture_img_create_info, &texture_img_alloc_info)? };
+        let view_create_info = ImageViewCreateInfo {
+            s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
+            image,
+            view_type: ImageViewType::TYPE_2D,
+            format: texture_img_create_info.format,
+            subresource_range: ImageSubresourceRange {
+                aspect_mask: ImageAspectFlags::COLOR,
+                level_count: tex.mipmap_levels(),
+                layer_count: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let view = unsafe { logical_device.create_image_view(&view_create_info, None)? };
+
+        let img_src_buf_create_info = BufferCreateInfo {
+            s_type: StructureType::BUFFER_CREATE_INFO,
+            size: tex_data.len() as u64,
+            usage: BufferUsageFlags::TRANSFER_SRC,
+            ..Default::default()
+        };
+
+        let img_src_alloc_create_info = AllocationCreateInfo {
+            usage: vk_mem::MemoryUsage::Auto,
+            flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | AllocationCreateFlags::MAPPED,
+            ..Default::default()
+        };
+
+        let (img_src_buf, img_src_buf_alloc) = unsafe {
+            vk_alloc.create_buffer(&img_src_buf_create_info, &img_src_alloc_create_info)?
+        };
+
+        println!(
+            "BUFFER SIZE: {}",
+            vk_alloc.get_allocation_info(&img_src_buf_alloc).size
+        );
+        println!("TEX DATA SIZE: {}", tex_data.len());
+
+        let tex_data_ptr = &tex_data as *const _ as *const c_void;
+        let img_src_buf_ptr = vk_alloc.get_allocation_info(&img_src_buf_alloc).mapped_data;
+        unsafe {
+            copy_nonoverlapping(tex_data_ptr, img_src_buf_ptr, tex_data.len());
+        }
     }
+
+    Ok(0)
 }
 
 // TODO: alongside a flag for this, add option to manually set device
