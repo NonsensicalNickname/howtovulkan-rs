@@ -1,5 +1,6 @@
 #![feature(array_try_map)]
 
+mod extra_ktx;
 mod gl_format;
 mod model;
 mod vk_format;
@@ -20,6 +21,7 @@ use std::{
     mem::forget,
     num::NonZeroU32,
     ptr::copy_nonoverlapping,
+    range,
     sync::Arc,
 };
 
@@ -31,15 +33,20 @@ use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
     vk::{
-        self, API_VERSION_1_3, Buffer, BufferCreateInfo, BufferUsageFlags, CommandBuffer,
-        CommandBufferAllocateInfo, CommandPool, CommandPoolCreateFlags, CommandPoolCreateInfo,
-        DeviceAddress, Extent2D, Extent3D, Fence, FenceCreateFlags, FenceCreateInfo, Format, Image,
-        ImageAspectFlags, ImageCreateInfo, ImageLayout, ImageSubresourceRange, ImageTiling,
-        ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, PhysicalDevice,
-        SampleCountFlags, Sampler, Semaphore, SemaphoreCreateInfo, StructureType,
+        self, API_VERSION_1_3, AccessFlags, AccessFlags2, Buffer, BufferCreateInfo,
+        BufferImageCopy, BufferUsageFlags, CommandBuffer, CommandBufferAllocateInfo,
+        CommandBufferBeginInfo, CommandBufferUsageFlags, CommandPool, CommandPoolCreateFlags,
+        CommandPoolCreateInfo, DependencyInfo, DescriptorImageInfo, DeviceAddress, Extent2D,
+        Extent3D, Fence, FenceCreateFlags, FenceCreateInfo, Filter, Format, Image,
+        ImageAspectFlags, ImageCreateInfo, ImageLayout, ImageMemoryBarrier2,
+        ImageSubresourceLayers, ImageSubresourceRange, ImageTiling, ImageUsageFlags, ImageView,
+        ImageViewCreateInfo, ImageViewType, PhysicalDevice, PipelineStageFlags,
+        PipelineStageFlags2, Queue, SampleCountFlags, Sampler, SamplerCreateInfo,
+        SamplerMipmapMode, Semaphore, SemaphoreCreateInfo, StructureType, SubmitInfo,
         SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE,
     },
 };
+use extra_ktx::ktxTexture_GetOffset;
 use ktx::{Ktx, KtxInfo, include_ktx, read::Textures};
 
 // check with show_physical_device_names
@@ -196,8 +203,8 @@ fn main() {
         // vk_alloc.unmap_memory(&mut buffer_alloc);
     };
 
-    forget(model_vertices);
-    forget(model_indices);
+    drop(model_vertices);
+    drop(model_indices);
 
     let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
 
@@ -218,7 +225,7 @@ fn main() {
         surface_loader: Arc::new(surface_loader),
     };
 
-    load_tex(&vk_alloc, &logical_device);
+    load_tex(&vk_alloc, &logical_device, command_pool, queue);
 
     evl.run_app(&mut app).unwrap();
 }
@@ -582,7 +589,12 @@ fn create_command_buffers(
     Ok((command_pool, command_buffers))
 }
 
-fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
+fn load_tex(
+    vk_alloc: &Allocator,
+    logical_device: &Device,
+    command_pool: CommandPool,
+    queue: Queue,
+) -> VkResult<u32> {
     let mut texture_files: Vec<Ktx<_>> = vec![
         include_ktx!("../assets/suzanne0.ktx"),
         include_ktx!("../assets/suzanne1.ktx"),
@@ -590,6 +602,7 @@ fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
     ];
 
     let mut textures: Vec<Texture> = Vec::new();
+    let mut texture_descriptors: Vec<DescriptorImageInfo> = Vec::new();
 
     for tex in texture_files {
         // iunno why the ktx crate doesnt just expose the raw data
@@ -660,13 +673,162 @@ fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
         };
 
         let img_src_buf_ptr = vk_alloc.get_allocation_info(&img_src_buf_alloc).mapped_data;
-
         let tex_data_ptr = tex_data.as_ptr() as *const c_void;
-        forget(tex_data);
 
         unsafe {
             copy_nonoverlapping(tex_data_ptr, img_src_buf_ptr, tex_data_size);
         }
+
+        drop(tex_data);
+
+        let fence_create_info = FenceCreateInfo {
+            s_type: StructureType::FENCE_CREATE_INFO,
+            ..Default::default()
+        };
+
+        let fence = unsafe { logical_device.create_fence(&fence_create_info, None)? };
+
+        let command_buffer_alloc_info = CommandBufferAllocateInfo {
+            s_type: StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
+            command_pool,
+            command_buffer_count: 1,
+            ..Default::default()
+        };
+
+        let command_buffer =
+            unsafe { logical_device.allocate_command_buffers(&command_buffer_alloc_info)? }[0];
+
+        let command_buffer_begin_info = CommandBufferBeginInfo {
+            s_type: StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            flags: CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            ..Default::default()
+        };
+
+        unsafe { logical_device.begin_command_buffer(command_buffer, &command_buffer_begin_info)? };
+
+        let barrier_tex_img = ImageMemoryBarrier2 {
+            s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
+            src_stage_mask: PipelineStageFlags2::NONE,
+            src_access_mask: AccessFlags2::NONE,
+            dst_stage_mask: PipelineStageFlags2::TRANSFER,
+            dst_access_mask: AccessFlags2::TRANSFER_WRITE,
+            old_layout: ImageLayout::UNDEFINED,
+            new_layout: ImageLayout::TRANSFER_DST_OPTIMAL,
+            image,
+            subresource_range: ImageSubresourceRange {
+                aspect_mask: ImageAspectFlags::COLOR,
+                level_count: tex.mipmap_levels(),
+                layer_count: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let mut barrier_tex_info = DependencyInfo {
+            s_type: StructureType::DEPENDENCY_INFO,
+            image_memory_barrier_count: 1,
+            p_image_memory_barriers: &barrier_tex_img,
+            ..Default::default()
+        };
+
+        unsafe { logical_device.cmd_pipeline_barrier2(command_buffer, &barrier_tex_info) };
+
+        let mut copy_regions: Vec<BufferImageCopy> = Vec::new();
+
+        for i in 0..tex.mipmap_levels() {
+            if let Some(mip_offset) = ktxTexture_GetOffset(tex, i, 0, 0) {
+                copy_regions.push(BufferImageCopy {
+                    buffer_offset: mip_offset,
+                    image_subresource: ImageSubresourceLayers {
+                        aspect_mask: ImageAspectFlags::COLOR,
+                        mip_level: i,
+                        layer_count: 1,
+                        ..Default::default()
+                    },
+                    image_extent: Extent3D {
+                        width: tex.pixel_width() >> i,
+                        height: tex.pixel_height() >> i,
+                        depth: 1,
+                    },
+                    ..Default::default()
+                })
+            } else {
+                return VkResult::Err(vk::Result::ERROR_UNKNOWN);
+            }
+        }
+
+        unsafe {
+            logical_device.cmd_copy_buffer_to_image(
+                command_buffer,
+                img_src_buf,
+                image,
+                ImageLayout::TRANSFER_DST_OPTIMAL,
+                &copy_regions,
+            )
+        };
+
+        let barrier_tex_read = ImageMemoryBarrier2 {
+            s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
+            src_stage_mask: PipelineStageFlags2::TRANSFER,
+            src_access_mask: AccessFlags2::TRANSFER_WRITE,
+            dst_stage_mask: PipelineStageFlags2::FRAGMENT_SHADER,
+            dst_access_mask: AccessFlags2::SHADER_READ,
+            old_layout: ImageLayout::TRANSFER_DST_OPTIMAL,
+            new_layout: ImageLayout::READ_ONLY_OPTIMAL,
+            image,
+            subresource_range: ImageSubresourceRange {
+                aspect_mask: ImageAspectFlags::COLOR,
+                level_count: tex.mipmap_levels(),
+                layer_count: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        barrier_tex_info.p_image_memory_barriers = &barrier_tex_read;
+
+        unsafe {
+            logical_device.cmd_pipeline_barrier2(command_buffer, &barrier_tex_info);
+            logical_device.end_command_buffer(command_buffer)?;
+        };
+
+        let submit_info = SubmitInfo {
+            s_type: StructureType::SUBMIT_INFO,
+            command_buffer_count: 1,
+            p_command_buffers: &command_buffer,
+            ..Default::default()
+        };
+
+        unsafe {
+            logical_device.queue_submit(queue, &[submit_info], fence)?;
+            logical_device.wait_for_fences(&[fence], true, u64::MAX)?;
+        }
+
+        let sampler_create_info = SamplerCreateInfo {
+            s_type: StructureType::SAMPLER_CREATE_INFO,
+            mag_filter: Filter::LINEAR,
+            min_filter: Filter::LINEAR,
+            mipmap_mode: SamplerMipmapMode::LINEAR,
+            anisotropy_enable: vk::TRUE,
+            max_anisotropy: 8.0,
+            max_lod: tex.mipmap_levels() as f32,
+            ..Default::default()
+        };
+
+        let sampler = unsafe { logical_device.create_sampler(&sampler_create_info, None)? };
+
+        textures.push(Texture {
+            alloc: image_alloc,
+            image,
+            view,
+            sampler,
+        });
+
+        texture_descriptors.push(DescriptorImageInfo {
+            sampler,
+            image_view: view,
+            image_layout: ImageLayout::READ_ONLY_OPTIMAL,
+        });
     }
 
     Ok(0)
