@@ -17,6 +17,7 @@ use winit::{
 use std::{
     array,
     ffi::{CString, c_char, c_void},
+    mem::forget,
     num::NonZeroU32,
     ptr::copy_nonoverlapping,
     sync::Arc,
@@ -180,8 +181,10 @@ fn main() {
     let buffer_mapped_ptr = vk_alloc.get_allocation_info(&buffer_alloc).mapped_data;
 
     println!("Copying mesh into VRAM...");
-    let vertices_ptr = &model_vertices as *const _ as *const c_void;
-    let indices_ptr = &model_indices as *const _ as *const c_void;
+
+    let vertices_ptr = model_vertices.as_ptr() as *const c_void;
+    let indices_ptr = model_indices.as_ptr() as *const c_void;
+
     unsafe {
         copy_nonoverlapping(vertices_ptr, buffer_mapped_ptr, model_vertices.len());
         copy_nonoverlapping(
@@ -189,8 +192,12 @@ fn main() {
             buffer_mapped_ptr.add(model_vertices.len()),
             model_indices.len(),
         );
-        //vk_alloc.unmap_memory(&mut buffer_alloc);
+        // perchance ?
+        // vk_alloc.unmap_memory(&mut buffer_alloc);
     };
+
+    forget(model_vertices);
+    forget(model_indices);
 
     let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
 
@@ -591,6 +598,7 @@ fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
         for layer in tex_data_layers {
             tex_data = [&tex_data, layer].concat();
         }
+        let tex_data_size = tex_data.len();
 
         let texture_img_create_info = ImageCreateInfo {
             s_type: StructureType::IMAGE_CREATE_INFO,
@@ -635,7 +643,7 @@ fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
 
         let img_src_buf_create_info = BufferCreateInfo {
             s_type: StructureType::BUFFER_CREATE_INFO,
-            size: tex_data.len() as u64,
+            size: tex_data_size as u64,
             usage: BufferUsageFlags::TRANSFER_SRC,
             ..Default::default()
         };
@@ -651,16 +659,13 @@ fn load_tex(vk_alloc: &Allocator, logical_device: &Device) -> VkResult<u32> {
             vk_alloc.create_buffer(&img_src_buf_create_info, &img_src_alloc_create_info)?
         };
 
-        println!(
-            "BUFFER SIZE: {}",
-            vk_alloc.get_allocation_info(&img_src_buf_alloc).size
-        );
-        println!("TEX DATA SIZE: {}", tex_data.len());
-
-        let tex_data_ptr = &tex_data as *const _ as *const c_void;
         let img_src_buf_ptr = vk_alloc.get_allocation_info(&img_src_buf_alloc).mapped_data;
+
+        let tex_data_ptr = tex_data.as_ptr() as *const c_void;
+        forget(tex_data);
+
         unsafe {
-            copy_nonoverlapping(tex_data_ptr, img_src_buf_ptr, tex_data.len());
+            copy_nonoverlapping(tex_data_ptr, img_src_buf_ptr, tex_data_size);
         }
     }
 
