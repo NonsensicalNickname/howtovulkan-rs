@@ -36,14 +36,18 @@ use ash::{
         self, API_VERSION_1_3, AccessFlags, AccessFlags2, Buffer, BufferCreateInfo,
         BufferImageCopy, BufferUsageFlags, CommandBuffer, CommandBufferAllocateInfo,
         CommandBufferBeginInfo, CommandBufferUsageFlags, CommandPool, CommandPoolCreateFlags,
-        CommandPoolCreateInfo, DependencyInfo, DescriptorImageInfo, DeviceAddress, Extent2D,
-        Extent3D, Fence, FenceCreateFlags, FenceCreateInfo, Filter, Format, Image,
-        ImageAspectFlags, ImageCreateInfo, ImageLayout, ImageMemoryBarrier2,
-        ImageSubresourceLayers, ImageSubresourceRange, ImageTiling, ImageUsageFlags, ImageView,
-        ImageViewCreateInfo, ImageViewType, PhysicalDevice, PipelineStageFlags,
-        PipelineStageFlags2, Queue, SampleCountFlags, Sampler, SamplerCreateInfo,
-        SamplerMipmapMode, Semaphore, SemaphoreCreateInfo, StructureType, SubmitInfo,
-        SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE,
+        CommandPoolCreateInfo, DependencyInfo, DescriptorBindingFlags, DescriptorImageInfo,
+        DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorSetAllocateInfo,
+        DescriptorSetLayoutBinding, DescriptorSetLayoutBindingFlagsCreateInfo,
+        DescriptorSetLayoutCreateInfo, DescriptorSetVariableDescriptorCountAllocateInfo,
+        DescriptorType, DeviceAddress, Extent2D, Extent3D, Fence, FenceCreateFlags,
+        FenceCreateInfo, Filter, Format, Image, ImageAspectFlags, ImageCreateInfo, ImageLayout,
+        ImageMemoryBarrier2, ImageSubresourceLayers, ImageSubresourceRange, ImageTiling,
+        ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, PhysicalDevice,
+        PipelineStageFlags, PipelineStageFlags2, Queue, SampleCountFlags, Sampler,
+        SamplerCreateInfo, SamplerMipmapMode, Semaphore, SemaphoreCreateInfo, ShaderStageFlags,
+        StructureType, SubmitInfo, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE,
+        WriteDescriptorSet,
     },
 };
 use extra_ktx::ktxTexture_GetOffset;
@@ -225,7 +229,10 @@ fn main() {
         surface_loader: Arc::new(surface_loader),
     };
 
-    load_tex(&vk_alloc, &logical_device, command_pool, queue);
+    let (textures, texture_descriptors) =
+        load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
+
+    setup_descriptors(&logical_device, &textures, &texture_descriptors);
 
     evl.run_app(&mut app).unwrap();
 }
@@ -594,8 +601,8 @@ fn load_tex(
     logical_device: &Device,
     command_pool: CommandPool,
     queue: Queue,
-) -> VkResult<u32> {
-    let mut texture_files: Vec<Ktx<_>> = vec![
+) -> VkResult<(Vec<Texture>, Vec<DescriptorImageInfo>)> {
+    let texture_files: Vec<Ktx<_>> = vec![
         include_ktx!("../assets/suzanne0.ktx"),
         include_ktx!("../assets/suzanne1.ktx"),
         include_ktx!("../assets/suzanne2.ktx"),
@@ -831,7 +838,95 @@ fn load_tex(
         });
     }
 
-    Ok(0)
+    // maybe this needs some explicit cleanup ?
+
+    Ok((textures, texture_descriptors))
+}
+
+fn setup_descriptors(
+    logical_device: &Device,
+    textures: &Vec<Texture>,
+    texture_descriptors: &Vec<DescriptorImageInfo>,
+) -> VkResult<()> {
+    let desc_variable_flag = DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
+
+    let desc_binding_flags = DescriptorSetLayoutBindingFlagsCreateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        binding_count: 1,
+        p_binding_flags: &desc_variable_flag,
+        ..Default::default()
+    };
+
+    let desc_layout_binding_tex = DescriptorSetLayoutBinding {
+        descriptor_type: DescriptorType::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: textures.len() as u32,
+        stage_flags: ShaderStageFlags::FRAGMENT,
+        ..Default::default()
+    };
+
+    let desc_layout_tex_create_info = DescriptorSetLayoutCreateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        p_next: &desc_binding_flags as *const _ as *const c_void,
+        binding_count: 1,
+        p_bindings: &desc_layout_binding_tex,
+        ..Default::default()
+    };
+
+    let descriptor_set_layout_tex =
+        unsafe { logical_device.create_descriptor_set_layout(&desc_layout_tex_create_info, None)? };
+
+    let pool_size = DescriptorPoolSize {
+        ty: DescriptorType::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: textures.len() as u32,
+        ..Default::default()
+    };
+
+    let desc_pool_create_info = DescriptorPoolCreateInfo {
+        s_type: StructureType::DESCRIPTOR_POOL_CREATE_INFO,
+        max_sets: 1,
+        pool_size_count: 1,
+        p_pool_sizes: &pool_size,
+        ..Default::default()
+    };
+
+    let descriptor_pool =
+        unsafe { logical_device.create_descriptor_pool(&desc_pool_create_info, None)? };
+
+    let variable_desc_count = textures.len() as u32;
+    let variable_desc_count_alloc_info = DescriptorSetVariableDescriptorCountAllocateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
+        descriptor_set_count: 1,
+        p_descriptor_counts: &variable_desc_count,
+        ..Default::default()
+    };
+
+    let tex_desc_set_alloc_info = DescriptorSetAllocateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
+        p_next: &variable_desc_count_alloc_info as *const _ as *const c_void,
+        descriptor_pool,
+        descriptor_set_count: 1,
+        p_set_layouts: &descriptor_set_layout_tex,
+        ..Default::default()
+    };
+
+    let descriptor_set_tex =
+        unsafe { logical_device.allocate_descriptor_sets(&tex_desc_set_alloc_info)? }[0];
+
+    let write_desc_set = WriteDescriptorSet {
+        s_type: StructureType::WRITE_DESCRIPTOR_SET,
+        dst_set: descriptor_set_tex,
+        dst_binding: 0,
+        descriptor_count: texture_descriptors.len() as u32,
+        descriptor_type: DescriptorType::COMBINED_IMAGE_SAMPLER,
+        p_image_info: texture_descriptors.as_ptr(),
+        ..Default::default()
+    };
+
+    unsafe {
+        logical_device.update_descriptor_sets(&[write_desc_set], &[]);
+    };
+
+    Ok(())
 }
 
 // TODO: alongside a flag for this, add option to manually set device

@@ -23,6 +23,7 @@
                 vulkan-validation-layers
                 vulkan-tools-lunarg
                 vulkan-memory-allocator
+                shader-slang
                 udev
 
                 stdenv.cc.cc.lib
@@ -41,9 +42,10 @@
 
             LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
 
+            SLANG_DIR = "${pkgs.shader-slang}";
             VULKAN_SDK = "${pkgs.vulkan-validation-layers}/share/vulkan/implicit_layer.d";
             VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
-            # LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
 
             # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
         };
