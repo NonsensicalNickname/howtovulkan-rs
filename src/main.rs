@@ -1,5 +1,3 @@
-#![feature(array_try_map)]
-
 mod extra_ktx;
 mod gl_format;
 mod model;
@@ -18,40 +16,21 @@ use winit::{
 use std::{
     array,
     ffi::{CString, c_char, c_void},
-    mem::forget,
     num::NonZeroU32,
     ptr::copy_nonoverlapping,
-    range,
     sync::Arc,
-};
-
-use vk_mem::{
-    Alloc, Allocation, AllocationCreateFlags, AllocationCreateInfo, AllocationInfo, Allocator,
 };
 
 use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
-    vk::{
-        self, API_VERSION_1_3, AccessFlags, AccessFlags2, Buffer, BufferCreateInfo,
-        BufferImageCopy, BufferUsageFlags, CommandBuffer, CommandBufferAllocateInfo,
-        CommandBufferBeginInfo, CommandBufferUsageFlags, CommandPool, CommandPoolCreateFlags,
-        CommandPoolCreateInfo, DependencyInfo, DescriptorBindingFlags, DescriptorImageInfo,
-        DescriptorPoolCreateInfo, DescriptorPoolSize, DescriptorSetAllocateInfo,
-        DescriptorSetLayoutBinding, DescriptorSetLayoutBindingFlagsCreateInfo,
-        DescriptorSetLayoutCreateInfo, DescriptorSetVariableDescriptorCountAllocateInfo,
-        DescriptorType, DeviceAddress, Extent2D, Extent3D, Fence, FenceCreateFlags,
-        FenceCreateInfo, Filter, Format, Image, ImageAspectFlags, ImageCreateInfo, ImageLayout,
-        ImageMemoryBarrier2, ImageSubresourceLayers, ImageSubresourceRange, ImageTiling,
-        ImageUsageFlags, ImageView, ImageViewCreateInfo, ImageViewType, PhysicalDevice,
-        PipelineStageFlags, PipelineStageFlags2, Queue, SampleCountFlags, Sampler,
-        SamplerCreateInfo, SamplerMipmapMode, Semaphore, SemaphoreCreateInfo, ShaderStageFlags,
-        StructureType, SubmitInfo, SurfaceCapabilitiesKHR, SurfaceKHR, SwapchainKHR, TRUE,
-        WriteDescriptorSet,
-    },
+    vk::{self, StructureType},
 };
+
+use vk_mem::Alloc;
+
 use extra_ktx::ktxTexture_GetOffset;
-use ktx::{Ktx, KtxInfo, include_ktx, read::Textures};
+use ktx::{Ktx, KtxInfo, include_ktx};
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
@@ -68,17 +47,17 @@ struct ShaderData {
 }
 
 struct ShaderDataBuffer {
-    alloc: Allocation,
-    alloc_info: AllocationInfo,
-    buffer: Buffer,
-    device_address: DeviceAddress,
+    alloc: vk_mem::Allocation,
+    alloc_info: vk_mem::AllocationInfo,
+    buffer: vk::Buffer,
+    device_address: vk::DeviceAddress,
 }
 
 struct Texture {
-    alloc: Allocation,
-    image: Image,
-    view: ImageView,
-    sampler: Sampler,
+    alloc: vk_mem::Allocation,
+    image: vk::Image,
+    view: vk::ImageView,
+    sampler: vk::Sampler,
 }
 
 fn main() {
@@ -212,7 +191,7 @@ fn main() {
 
     let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
 
-    let mut render_semaphores = Vec::<Semaphore>::with_capacity(swapchain_images.len());
+    let mut render_semaphores = Vec::<vk::Semaphore>::with_capacity(swapchain_images.len());
     let (fences, present_semaphores) = init_sync_objects(
         &logical_device,
         swapchain_images.len(),
@@ -232,7 +211,7 @@ fn main() {
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
-    setup_descriptors(&logical_device, &textures, &texture_descriptors);
+    setup_descriptors(&logical_device, &textures, &texture_descriptors).expect("Could not set up descriptors");
 
     evl.run_app(&mut app).unwrap();
 }
@@ -243,7 +222,7 @@ fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<
         app_info = vk::ApplicationInfo {
             s_type: StructureType::APPLICATION_INFO,
             p_application_name: s.as_ptr(),
-            api_version: API_VERSION_1_3,
+            api_version: vk::API_VERSION_1_3,
             ..Default::default()
         }
     } else {
@@ -332,23 +311,23 @@ fn get_logical_device(
 
     let mut enabled_vk12_features = vk::PhysicalDeviceVulkan12Features {
         s_type: StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
-        descriptor_indexing: TRUE,
-        descriptor_binding_variable_descriptor_count: TRUE,
-        runtime_descriptor_array: TRUE,
-        buffer_device_address: TRUE,
+        descriptor_indexing: vk::TRUE,
+        descriptor_binding_variable_descriptor_count: vk::TRUE,
+        runtime_descriptor_array: vk::TRUE,
+        buffer_device_address: vk::TRUE,
         ..Default::default()
     };
 
     let mut enabled_vk13_features = vk::PhysicalDeviceVulkan13Features {
         s_type: StructureType::PHYSICAL_DEVICE_VULKAN_1_3_FEATURES,
         p_next: &mut enabled_vk12_features as *mut _ as *mut c_void,
-        synchronization2: TRUE,
-        dynamic_rendering: TRUE,
+        synchronization2: vk::TRUE,
+        dynamic_rendering: vk::TRUE,
         ..Default::default()
     };
 
     let enabled_vk10_features = vk::PhysicalDeviceFeatures {
-        sampler_anisotropy: TRUE,
+        sampler_anisotropy: vk::TRUE,
         ..Default::default()
     };
 
@@ -368,10 +347,10 @@ fn get_logical_device(
 
 fn create_swapchain(
     swapchain_loader: &khr::swapchain::Device,
-    surface: SurfaceKHR,
-    sf_caps: &SurfaceCapabilitiesKHR,
+    surface: vk::SurfaceKHR,
+    sf_caps: &vk::SurfaceCapabilitiesKHR,
     (width, height): (u32, u32),
-) -> VkResult<SwapchainKHR> {
+) -> VkResult<vk::SwapchainKHR> {
     let image_format = vk::Format::B8G8R8A8_SRGB;
 
     let swapchain_info = vk::SwapchainCreateInfoKHR {
@@ -380,7 +359,7 @@ fn create_swapchain(
         min_image_count: sf_caps.min_image_count,
         image_format,
         image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-        image_extent: Extent2D { width, height },
+        image_extent: vk::Extent2D { width, height },
         image_array_layers: 1_u32,
         image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
         pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
@@ -395,10 +374,10 @@ fn create_swapchain(
 fn get_depth_image(
     instance: &Instance,
     logical_device: &Device,
-    physical_device: PhysicalDevice,
+    physical_device: vk::PhysicalDevice,
     (width, height): (u32, u32),
-    vk_alloc: &Allocator,
-) -> VkResult<(Image, vk_mem::Allocation, ImageView)> {
+    vk_alloc: &vk_mem::Allocator,
+) -> VkResult<(vk::Image, vk_mem::Allocation, vk::ImageView)> {
     let depth_formats = [
         vk::Format::D32_SFLOAT_S8_UINT,
         vk::Format::D24_UNORM_S8_UINT,
@@ -432,7 +411,7 @@ fn get_depth_image(
         s_type: StructureType::IMAGE_CREATE_INFO,
         image_type: vk::ImageType::TYPE_2D,
         format: depth_format,
-        extent: Extent3D {
+        extent: vk::Extent3D {
             width,
             height,
             depth: 1,
@@ -459,7 +438,7 @@ fn get_depth_image(
         image: depth_image.0,
         view_type: vk::ImageViewType::TYPE_2D,
         format: depth_format,
-        subresource_range: ImageSubresourceRange {
+        subresource_range: vk::ImageSubresourceRange {
             aspect_mask: vk::ImageAspectFlags::DEPTH,
             level_count: 1_u32,
             layer_count: 1_u32,
@@ -473,7 +452,10 @@ fn get_depth_image(
     Ok((depth_image.0, depth_image.1, image_view))
 }
 
-fn get_buffer(vk_alloc: &Allocator, size: u64) -> VkResult<(Buffer, vk_mem::Allocation)> {
+fn get_buffer(
+    vk_alloc: &vk_mem::Allocator,
+    size: u64,
+) -> VkResult<(vk::Buffer, vk_mem::Allocation)> {
     let buffer_info = vk::BufferCreateInfo {
         s_type: StructureType::BUFFER_CREATE_INFO,
         size,
@@ -493,7 +475,7 @@ fn get_buffer(vk_alloc: &Allocator, size: u64) -> VkResult<(Buffer, vk_mem::Allo
 }
 
 fn init_shader_data_buffers(
-    vk_alloc: &Allocator,
+    vk_alloc: &vk_mem::Allocator,
     logical_device: &Device,
 ) -> [ShaderDataBuffer; MAX_FRAMES_IN_FLIGHT] {
     let buffer_info = vk::BufferCreateInfo {
@@ -535,32 +517,30 @@ fn init_shader_data_buffers(
 fn init_sync_objects(
     logical_device: &Device,
     n_swapchain_images: usize,
-    render_semaphores: &mut Vec<Semaphore>,
+    render_semaphores: &mut Vec<vk::Semaphore>,
 ) -> VkResult<(
-    [Fence; MAX_FRAMES_IN_FLIGHT],
-    [Semaphore; MAX_FRAMES_IN_FLIGHT],
+    [vk::Fence; MAX_FRAMES_IN_FLIGHT],
+    [vk::Semaphore; MAX_FRAMES_IN_FLIGHT],
 )> {
-    let semaphore_create_info = SemaphoreCreateInfo {
+    let semaphore_create_info = vk::SemaphoreCreateInfo {
         s_type: StructureType::SEMAPHORE_CREATE_INFO,
         ..Default::default()
     };
 
-    let fence_create_info = FenceCreateInfo {
+    let fence_create_info = vk::FenceCreateInfo {
         s_type: StructureType::FENCE_CREATE_INFO,
-        flags: FenceCreateFlags::SIGNALED,
+        flags: vk::FenceCreateFlags::SIGNALED,
         ..Default::default()
     };
 
-    let fences: [Fence; MAX_FRAMES_IN_FLIGHT] =
-        array::from_fn(|_| unsafe { logical_device.create_fence(&fence_create_info, None) })
-            .try_map(|i| i)?;
+    let fences: [vk::Fence; MAX_FRAMES_IN_FLIGHT] =
+        [unsafe { logical_device.create_fence(&fence_create_info, None)? }; MAX_FRAMES_IN_FLIGHT];
 
-    let present_semaphores: [Semaphore; MAX_FRAMES_IN_FLIGHT] = array::from_fn(|_| unsafe {
-        logical_device.create_semaphore(&semaphore_create_info, None)
-    })
-    .try_map(|i| i)?;
+    let present_semaphores: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT] =
+        [unsafe { logical_device.create_semaphore(&semaphore_create_info, None)? };
+            MAX_FRAMES_IN_FLIGHT];
 
-    render_semaphores.resize(n_swapchain_images, Semaphore::null());
+    render_semaphores.resize(n_swapchain_images, vk::Semaphore::null());
 
     for semaphore in render_semaphores {
         *semaphore = unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }?;
@@ -572,10 +552,10 @@ fn init_sync_objects(
 fn create_command_buffers(
     logical_device: &Device,
     qf_idx: u32,
-) -> VkResult<(CommandPool, Vec<CommandBuffer>)> {
-    let command_pool_create_info = CommandPoolCreateInfo {
+) -> VkResult<(vk::CommandPool, Vec<vk::CommandBuffer>)> {
+    let command_pool_create_info = vk::CommandPoolCreateInfo {
         s_type: StructureType::COMMAND_POOL_CREATE_INFO,
-        flags: CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
+        flags: vk::CommandPoolCreateFlags::RESET_COMMAND_BUFFER,
         queue_family_index: qf_idx,
         ..Default::default()
     };
@@ -583,7 +563,7 @@ fn create_command_buffers(
     let command_pool =
         unsafe { logical_device.create_command_pool(&command_pool_create_info, None)? };
 
-    let command_buffer_alloc_info = CommandBufferAllocateInfo {
+    let command_buffer_alloc_info = vk::CommandBufferAllocateInfo {
         s_type: StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
         command_pool,
         command_buffer_count: MAX_FRAMES_IN_FLIGHT as u32,
@@ -597,11 +577,11 @@ fn create_command_buffers(
 }
 
 fn load_tex(
-    vk_alloc: &Allocator,
+    vk_alloc: &vk_mem::Allocator,
     logical_device: &Device,
-    command_pool: CommandPool,
-    queue: Queue,
-) -> VkResult<(Vec<Texture>, Vec<DescriptorImageInfo>)> {
+    command_pool: vk::CommandPool,
+    queue: vk::Queue,
+) -> VkResult<(Vec<Texture>, Vec<vk::DescriptorImageInfo>)> {
     let texture_files: Vec<Ktx<_>> = vec![
         include_ktx!("../assets/suzanne0.ktx"),
         include_ktx!("../assets/suzanne1.ktx"),
@@ -609,7 +589,7 @@ fn load_tex(
     ];
 
     let mut textures: Vec<Texture> = Vec::new();
-    let mut texture_descriptors: Vec<DescriptorImageInfo> = Vec::new();
+    let mut texture_descriptors: Vec<vk::DescriptorImageInfo> = Vec::new();
 
     for tex in texture_files {
         // iunno why the ktx crate doesnt just expose the raw data
@@ -620,38 +600,38 @@ fn load_tex(
         }
         let tex_data_size = tex_data.len();
 
-        let texture_img_create_info = ImageCreateInfo {
+        let texture_img_create_info = vk::ImageCreateInfo {
             s_type: StructureType::IMAGE_CREATE_INFO,
             image_type: vk::ImageType::TYPE_2D,
             format: vk_format::get_vk_format(tex).unwrap(),
-            extent: Extent3D {
+            extent: vk::Extent3D {
                 width: tex.pixel_width(),
                 height: tex.pixel_height(),
                 depth: 1,
             },
             mip_levels: tex.mipmap_levels(),
             array_layers: 1,
-            samples: SampleCountFlags::TYPE_1,
-            tiling: ImageTiling::OPTIMAL,
-            usage: ImageUsageFlags::TRANSFER_DST | ImageUsageFlags::SAMPLED,
-            initial_layout: ImageLayout::UNDEFINED,
+            samples: vk::SampleCountFlags::TYPE_1,
+            tiling: vk::ImageTiling::OPTIMAL,
+            usage: vk::ImageUsageFlags::TRANSFER_DST | vk::ImageUsageFlags::SAMPLED,
+            initial_layout: vk::ImageLayout::UNDEFINED,
             ..Default::default()
         };
 
-        let texture_img_alloc_info = AllocationCreateInfo {
+        let texture_img_alloc_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::Auto,
             ..Default::default()
         };
 
         let (image, image_alloc) =
             unsafe { vk_alloc.create_image(&texture_img_create_info, &texture_img_alloc_info)? };
-        let view_create_info = ImageViewCreateInfo {
+        let view_create_info = vk::ImageViewCreateInfo {
             s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
             image,
-            view_type: ImageViewType::TYPE_2D,
+            view_type: vk::ImageViewType::TYPE_2D,
             format: texture_img_create_info.format,
-            subresource_range: ImageSubresourceRange {
-                aspect_mask: ImageAspectFlags::COLOR,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
                 level_count: tex.mipmap_levels(),
                 layer_count: 1,
                 ..Default::default()
@@ -661,17 +641,17 @@ fn load_tex(
 
         let view = unsafe { logical_device.create_image_view(&view_create_info, None)? };
 
-        let img_src_buf_create_info = BufferCreateInfo {
+        let img_src_buf_create_info = vk::BufferCreateInfo {
             s_type: StructureType::BUFFER_CREATE_INFO,
             size: tex_data_size as u64,
-            usage: BufferUsageFlags::TRANSFER_SRC,
+            usage: vk::BufferUsageFlags::TRANSFER_SRC,
             ..Default::default()
         };
 
-        let img_src_alloc_create_info = AllocationCreateInfo {
+        let img_src_alloc_create_info = vk_mem::AllocationCreateInfo {
             usage: vk_mem::MemoryUsage::Auto,
-            flags: AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-                | AllocationCreateFlags::MAPPED,
+            flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+                | vk_mem::AllocationCreateFlags::MAPPED,
             ..Default::default()
         };
 
@@ -688,14 +668,14 @@ fn load_tex(
 
         drop(tex_data);
 
-        let fence_create_info = FenceCreateInfo {
+        let fence_create_info = vk::FenceCreateInfo {
             s_type: StructureType::FENCE_CREATE_INFO,
             ..Default::default()
         };
 
         let fence = unsafe { logical_device.create_fence(&fence_create_info, None)? };
 
-        let command_buffer_alloc_info = CommandBufferAllocateInfo {
+        let command_buffer_alloc_info = vk::CommandBufferAllocateInfo {
             s_type: StructureType::COMMAND_BUFFER_ALLOCATE_INFO,
             command_pool,
             command_buffer_count: 1,
@@ -705,25 +685,25 @@ fn load_tex(
         let command_buffer =
             unsafe { logical_device.allocate_command_buffers(&command_buffer_alloc_info)? }[0];
 
-        let command_buffer_begin_info = CommandBufferBeginInfo {
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo {
             s_type: StructureType::COMMAND_BUFFER_BEGIN_INFO,
-            flags: CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
             ..Default::default()
         };
 
         unsafe { logical_device.begin_command_buffer(command_buffer, &command_buffer_begin_info)? };
 
-        let barrier_tex_img = ImageMemoryBarrier2 {
+        let barrier_tex_img = vk::ImageMemoryBarrier2 {
             s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
-            src_stage_mask: PipelineStageFlags2::NONE,
-            src_access_mask: AccessFlags2::NONE,
-            dst_stage_mask: PipelineStageFlags2::TRANSFER,
-            dst_access_mask: AccessFlags2::TRANSFER_WRITE,
-            old_layout: ImageLayout::UNDEFINED,
-            new_layout: ImageLayout::TRANSFER_DST_OPTIMAL,
+            src_stage_mask: vk::PipelineStageFlags2::NONE,
+            src_access_mask: vk::AccessFlags2::NONE,
+            dst_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+            dst_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+            old_layout: vk::ImageLayout::UNDEFINED,
+            new_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
             image,
-            subresource_range: ImageSubresourceRange {
-                aspect_mask: ImageAspectFlags::COLOR,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
                 level_count: tex.mipmap_levels(),
                 layer_count: 1,
                 ..Default::default()
@@ -731,7 +711,7 @@ fn load_tex(
             ..Default::default()
         };
 
-        let mut barrier_tex_info = DependencyInfo {
+        let mut barrier_tex_info = vk::DependencyInfo {
             s_type: StructureType::DEPENDENCY_INFO,
             image_memory_barrier_count: 1,
             p_image_memory_barriers: &barrier_tex_img,
@@ -740,19 +720,19 @@ fn load_tex(
 
         unsafe { logical_device.cmd_pipeline_barrier2(command_buffer, &barrier_tex_info) };
 
-        let mut copy_regions: Vec<BufferImageCopy> = Vec::new();
+        let mut copy_regions: Vec<vk::BufferImageCopy> = Vec::new();
 
         for i in 0..tex.mipmap_levels() {
             if let Some(mip_offset) = ktxTexture_GetOffset(tex, i, 0, 0) {
-                copy_regions.push(BufferImageCopy {
+                copy_regions.push(vk::BufferImageCopy {
                     buffer_offset: mip_offset,
-                    image_subresource: ImageSubresourceLayers {
-                        aspect_mask: ImageAspectFlags::COLOR,
+                    image_subresource: vk::ImageSubresourceLayers {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
                         mip_level: i,
                         layer_count: 1,
                         ..Default::default()
                     },
-                    image_extent: Extent3D {
+                    image_extent: vk::Extent3D {
                         width: tex.pixel_width() >> i,
                         height: tex.pixel_height() >> i,
                         depth: 1,
@@ -769,22 +749,22 @@ fn load_tex(
                 command_buffer,
                 img_src_buf,
                 image,
-                ImageLayout::TRANSFER_DST_OPTIMAL,
+                vk::ImageLayout::TRANSFER_DST_OPTIMAL,
                 &copy_regions,
             )
         };
 
-        let barrier_tex_read = ImageMemoryBarrier2 {
+        let barrier_tex_read = vk::ImageMemoryBarrier2 {
             s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
-            src_stage_mask: PipelineStageFlags2::TRANSFER,
-            src_access_mask: AccessFlags2::TRANSFER_WRITE,
-            dst_stage_mask: PipelineStageFlags2::FRAGMENT_SHADER,
-            dst_access_mask: AccessFlags2::SHADER_READ,
-            old_layout: ImageLayout::TRANSFER_DST_OPTIMAL,
-            new_layout: ImageLayout::READ_ONLY_OPTIMAL,
+            src_stage_mask: vk::PipelineStageFlags2::TRANSFER,
+            src_access_mask: vk::AccessFlags2::TRANSFER_WRITE,
+            dst_stage_mask: vk::PipelineStageFlags2::FRAGMENT_SHADER,
+            dst_access_mask: vk::AccessFlags2::SHADER_READ,
+            old_layout: vk::ImageLayout::TRANSFER_DST_OPTIMAL,
+            new_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
             image,
-            subresource_range: ImageSubresourceRange {
-                aspect_mask: ImageAspectFlags::COLOR,
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
                 level_count: tex.mipmap_levels(),
                 layer_count: 1,
                 ..Default::default()
@@ -799,7 +779,7 @@ fn load_tex(
             logical_device.end_command_buffer(command_buffer)?;
         };
 
-        let submit_info = SubmitInfo {
+        let submit_info = vk::SubmitInfo {
             s_type: StructureType::SUBMIT_INFO,
             command_buffer_count: 1,
             p_command_buffers: &command_buffer,
@@ -811,11 +791,11 @@ fn load_tex(
             logical_device.wait_for_fences(&[fence], true, u64::MAX)?;
         }
 
-        let sampler_create_info = SamplerCreateInfo {
+        let sampler_create_info = vk::SamplerCreateInfo {
             s_type: StructureType::SAMPLER_CREATE_INFO,
-            mag_filter: Filter::LINEAR,
-            min_filter: Filter::LINEAR,
-            mipmap_mode: SamplerMipmapMode::LINEAR,
+            mag_filter: vk::Filter::LINEAR,
+            min_filter: vk::Filter::LINEAR,
+            mipmap_mode: vk::SamplerMipmapMode::LINEAR,
             anisotropy_enable: vk::TRUE,
             max_anisotropy: 8.0,
             max_lod: tex.mipmap_levels() as f32,
@@ -831,10 +811,10 @@ fn load_tex(
             sampler,
         });
 
-        texture_descriptors.push(DescriptorImageInfo {
+        texture_descriptors.push(vk::DescriptorImageInfo {
             sampler,
             image_view: view,
-            image_layout: ImageLayout::READ_ONLY_OPTIMAL,
+            image_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
         });
     }
 
@@ -846,25 +826,25 @@ fn load_tex(
 fn setup_descriptors(
     logical_device: &Device,
     textures: &Vec<Texture>,
-    texture_descriptors: &Vec<DescriptorImageInfo>,
+    texture_descriptors: &Vec<vk::DescriptorImageInfo>,
 ) -> VkResult<()> {
-    let desc_variable_flag = DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
+    let desc_variable_flag = vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
 
-    let desc_binding_flags = DescriptorSetLayoutBindingFlagsCreateInfo {
+    let desc_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         binding_count: 1,
         p_binding_flags: &desc_variable_flag,
         ..Default::default()
     };
 
-    let desc_layout_binding_tex = DescriptorSetLayoutBinding {
-        descriptor_type: DescriptorType::COMBINED_IMAGE_SAMPLER,
+    let desc_layout_binding_tex = vk::DescriptorSetLayoutBinding {
+        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         descriptor_count: textures.len() as u32,
-        stage_flags: ShaderStageFlags::FRAGMENT,
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
         ..Default::default()
     };
 
-    let desc_layout_tex_create_info = DescriptorSetLayoutCreateInfo {
+    let desc_layout_tex_create_info = vk::DescriptorSetLayoutCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         p_next: &desc_binding_flags as *const _ as *const c_void,
         binding_count: 1,
@@ -875,13 +855,13 @@ fn setup_descriptors(
     let descriptor_set_layout_tex =
         unsafe { logical_device.create_descriptor_set_layout(&desc_layout_tex_create_info, None)? };
 
-    let pool_size = DescriptorPoolSize {
-        ty: DescriptorType::COMBINED_IMAGE_SAMPLER,
+    let pool_size = vk::DescriptorPoolSize {
+        ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         descriptor_count: textures.len() as u32,
         ..Default::default()
     };
 
-    let desc_pool_create_info = DescriptorPoolCreateInfo {
+    let desc_pool_create_info = vk::DescriptorPoolCreateInfo {
         s_type: StructureType::DESCRIPTOR_POOL_CREATE_INFO,
         max_sets: 1,
         pool_size_count: 1,
@@ -893,14 +873,14 @@ fn setup_descriptors(
         unsafe { logical_device.create_descriptor_pool(&desc_pool_create_info, None)? };
 
     let variable_desc_count = textures.len() as u32;
-    let variable_desc_count_alloc_info = DescriptorSetVariableDescriptorCountAllocateInfo {
+    let variable_desc_count_alloc_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo {
         s_type: StructureType::DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
         descriptor_set_count: 1,
         p_descriptor_counts: &variable_desc_count,
         ..Default::default()
     };
 
-    let tex_desc_set_alloc_info = DescriptorSetAllocateInfo {
+    let tex_desc_set_alloc_info = vk::DescriptorSetAllocateInfo {
         s_type: StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
         p_next: &variable_desc_count_alloc_info as *const _ as *const c_void,
         descriptor_pool,
@@ -912,12 +892,12 @@ fn setup_descriptors(
     let descriptor_set_tex =
         unsafe { logical_device.allocate_descriptor_sets(&tex_desc_set_alloc_info)? }[0];
 
-    let write_desc_set = WriteDescriptorSet {
+    let write_desc_set = vk::WriteDescriptorSet {
         s_type: StructureType::WRITE_DESCRIPTOR_SET,
         dst_set: descriptor_set_tex,
         dst_binding: 0,
         descriptor_count: texture_descriptors.len() as u32,
-        descriptor_type: DescriptorType::COMBINED_IMAGE_SAMPLER,
+        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         p_image_info: texture_descriptors.as_ptr(),
         ..Default::default()
     };
