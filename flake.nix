@@ -9,12 +9,13 @@
         pkgs = nixpkgs.legacyPackages."x86_64-linux";
     in {
         # dependencies per raylib-rs
-        devShells."x86_64-linux".default = pkgs.mkShell rec {
+        devShells."x86_64-linux".default = pkgs.mkShellNoCC rec {
             buildInputs = with pkgs; [
                 ktx-tools
 
                 libxkbcommon
                 wayland
+                pkg-config
 
                 vulkan-headers
                 vulkan-loader
@@ -23,7 +24,9 @@
                 vulkan-validation-layers
                 vulkan-tools-lunarg
                 vulkan-memory-allocator
+                mesa-demos
                 shader-slang
+                shaderc
                 udev
 
                 stdenv.cc.cc.lib
@@ -41,11 +44,11 @@
             ];
 
             LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
-
-            SLANG_DIR = "${pkgs.shader-slang}";
+            SHADERC_LIB_DIR = "${pkgs.lib.makeLibraryPath [pkgs.shaderc]}";
             VULKAN_SDK = "${pkgs.vulkan-validation-layers}/share/vulkan/implicit_layer.d";
             VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
             LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+            VK_LOADER_DEBUG= "all vulkaninfo";
 
             # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
         };

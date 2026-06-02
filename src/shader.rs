@@ -1,0 +1,22 @@
+use ash::{
+    Device, Entry, Instance, khr,
+    prelude::VkResult,
+    vk::{self, StructureType},
+};
+
+use inline_spirv::include_spirv;
+
+pub fn load_shader_module() -> VkResult<()> {
+    // TODO: Pending writing of shader
+    // let frag_spv = include_spirv!("assets/frag.glsl", glsl, frag);
+    // let vert_spv = include_spirv!("assets/vert.glsl", glsl, vert);
+
+    let shader_module_create_info = vk::ShaderModuleCreateInfo {
+        s_type: StructureType::SHADER_MODULE_CREATE_INFO,
+        //code_size: ,
+        //p_code: ,
+        ..Default::default()
+    };
+
+    Ok(())
+}

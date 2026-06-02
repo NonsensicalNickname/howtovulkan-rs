@@ -1,6 +1,7 @@
 mod extra_ktx;
 mod gl_format;
 mod model;
+mod shader;
 mod vk_format;
 mod window;
 
@@ -211,7 +212,8 @@ fn main() {
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
-    setup_descriptors(&logical_device, &textures, &texture_descriptors).expect("Could not set up descriptors");
+    setup_descriptors(&logical_device, &textures, &texture_descriptors)
+        .expect("Could not set up descriptors");
 
     evl.run_app(&mut app).unwrap();
 }
