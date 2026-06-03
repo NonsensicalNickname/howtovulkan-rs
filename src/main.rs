@@ -61,6 +61,7 @@ struct Texture {
     sampler: vk::Sampler,
 }
 
+#[allow(unused)]
 fn main() {
     let entry = unsafe { Entry::load().expect("Wuh oh, no vulkan sdk and such") };
 
