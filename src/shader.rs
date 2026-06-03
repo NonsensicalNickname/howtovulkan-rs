@@ -7,9 +7,8 @@ use ash::{
 use inline_spirv::include_spirv;
 
 pub fn load_shader_module() -> VkResult<()> {
-    // TODO: Pending writing of shader
     let frag_spv = include_spirv!("assets/shader.frag", frag, glsl);
-    //let vert_spv = include_spirv!("assets/shader.vert", glsl, vert);
+    let vert_spv = include_spirv!("assets/shader.vert", vert, glsl);
 
     let shader_module_create_info = vk::ShaderModuleCreateInfo {
         s_type: StructureType::SHADER_MODULE_CREATE_INFO,
