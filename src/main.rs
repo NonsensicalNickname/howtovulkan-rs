@@ -231,45 +231,12 @@ fn main() {
         ..Default::default()
     };
 
-    // TODO: actually add to the pipeline
-    let descriptor_bindings = [
-        DescriptorSetLayoutBinding {
-            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            binding: 0,
-            stage_flags: vk::ShaderStageFlags::VERTEX,
-            ..Default::default()
-        },
-        DescriptorSetLayoutBinding {
-            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-            binding: 1,
-            stage_flags: vk::ShaderStageFlags::VERTEX,
-            ..Default::default()
-        },
-        DescriptorSetLayoutBinding {
-            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-            binding: 2,
-            stage_flags: vk::ShaderStageFlags::FRAGMENT,
-            ..Default::default()
-        },
-    ];
-
-    let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
-        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        binding_count: 3,
-        p_bindings: descriptor_bindings.as_ptr(),
-        ..Default::default()
-    };
-
-    // let descriptor_set_layout = unsafe { logical_device.create_descriptor_set_layout(&descriptor_set_layout_create_info, None).expect("fuck") };
-
     let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
         s_type: StructureType::PIPELINE_LAYOUT_CREATE_INFO,
         set_layout_count: 1,
         p_set_layouts: &descriptor_set_layout_tex,
         push_constant_range_count: 1,
         p_push_constant_ranges: &push_const_range,
-        // set_layout_count: 1,
-        // p_set_layouts: &descriptor_set_layout,
         ..Default::default()
     };
 
@@ -1032,27 +999,39 @@ fn setup_descriptors(
     textures: &Vec<Texture>,
     texture_descriptors: &Vec<vk::DescriptorImageInfo>,
 ) -> VkResult<vk::DescriptorSetLayout> {
-    let desc_variable_flag = vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
+    let desc_variable_flag = [
+        vk::DescriptorBindingFlags::empty(),
+        vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT,
+    ];
 
     let desc_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        binding_count: 1,
-        p_binding_flags: &desc_variable_flag,
+        binding_count: 2,
+        p_binding_flags: desc_variable_flag.as_ptr(),
         ..Default::default()
     };
 
-    let desc_layout_binding_tex = vk::DescriptorSetLayoutBinding {
-        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-        descriptor_count: textures.len() as u32,
-        stage_flags: vk::ShaderStageFlags::FRAGMENT,
-        ..Default::default()
-    };
+    let bindings = &[
+        vk::DescriptorSetLayoutBinding {
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+            binding: 0,
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            ..Default::default()
+        },
+        vk::DescriptorSetLayoutBinding {
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            descriptor_count: textures.len() as u32,
+            binding: 1,
+            stage_flags: vk::ShaderStageFlags::FRAGMENT,
+            ..Default::default()
+        },
+    ];
 
     let desc_layout_tex_create_info = vk::DescriptorSetLayoutCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         p_next: &desc_binding_flags as *const _ as *const c_void,
-        binding_count: 1,
-        p_bindings: &desc_layout_binding_tex,
+        binding_count: 2,
+        p_bindings: bindings.as_ptr(),
         ..Default::default()
     };
 
@@ -1099,7 +1078,7 @@ fn setup_descriptors(
     let write_desc_set = vk::WriteDescriptorSet {
         s_type: StructureType::WRITE_DESCRIPTOR_SET,
         dst_set: descriptor_set_tex,
-        dst_binding: 0,
+        dst_binding: 1,
         descriptor_count: texture_descriptors.len() as u32,
         descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         p_image_info: texture_descriptors.as_ptr(),

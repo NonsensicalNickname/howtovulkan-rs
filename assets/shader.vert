@@ -1,7 +1,6 @@
 #version 450 core
 
-layout (set = 0, binding = 0) uniform sampler2D textures[];
-layout (set = 0, binding = 1) uniform ShaderData {
+layout (set = 0, binding = 0) uniform ShaderData {
     mat4 projection;
     mat4 view;
     mat4 model[3];
