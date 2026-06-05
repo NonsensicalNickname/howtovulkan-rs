@@ -1,17 +1,17 @@
 #version 450 core
 #extension GL_EXT_nonuniform_qualifier : enable
 
-layout (set = 0, binding = 0) uniform sampler2D textures[];
+layout (set = 0, binding = 2) uniform sampler2D textures[];
 
-layout(location = 0) out vec4 Colour;
+layout(location = 3) out vec4 Colour;
 
-layout (location = 1) in vec4 Pos; 
-layout (location = 2) in vec3 Normal;
-layout (location = 3) in vec2 UV;
-layout (location = 4) in vec3 Factor;
-layout (location = 5) in vec3 LightVec;
-layout (location = 6) in vec3 ViewVec;
-layout (location = 7) flat in uint InstanceIndex;
+layout (location = 3) in vec4 Pos; 
+layout (location = 4) in vec3 Normal;
+layout (location = 5) in vec2 UV;
+layout (location = 6) in vec3 Factor;
+layout (location = 7) in vec3 LightVec;
+layout (location = 8) in vec3 ViewVec;
+layout (location = 9) flat in uint InstanceIndex;
 
 void main() {
     vec3 N = normalize(Normal);

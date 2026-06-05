@@ -6,16 +6,25 @@ use ash::{
 
 use inline_spirv::include_spirv;
 
-pub fn load_shader_module() -> VkResult<()> {
-    let frag_spv = include_spirv!("assets/shader.frag", frag, glsl);
-    let vert_spv = include_spirv!("assets/shader.vert", vert, glsl);
+pub fn load_shader_module(
+    logical_device: &Device,
+) -> VkResult<(vk::ShaderModule, vk::ShaderModule)> {
+    let vert_spv: &[u32] = include_spirv!("assets/shader.vert", glsl, vert, vulkan1_2);
+    let frag_spv: &[u32] = include_spirv!("assets/shader.frag", glsl, frag, vulkan1_2);
 
-    let shader_module_create_info = vk::ShaderModuleCreateInfo {
+    unsafe {
+        Ok((
+            logical_device.create_shader_module(&create_shader_info(vert_spv), None)?,
+            logical_device.create_shader_module(&create_shader_info(frag_spv), None)?,
+        ))
+    }
+}
+
+fn create_shader_info(spv: &[u32]) -> vk::ShaderModuleCreateInfo {
+    vk::ShaderModuleCreateInfo {
         s_type: StructureType::SHADER_MODULE_CREATE_INFO,
-        //code_size: ,
-        //p_code: ,
+        code_size: spv.len() * size_of::<u32>(),
+        p_code: spv.as_ptr(),
         ..Default::default()
-    };
-
-    Ok(())
+    }
 }

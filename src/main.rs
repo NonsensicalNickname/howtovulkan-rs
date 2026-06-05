@@ -5,6 +5,8 @@ mod shader;
 mod vk_format;
 mod window;
 
+use model::Vertex;
+
 use window::AppWindow;
 
 use winit::{
@@ -17,6 +19,7 @@ use winit::{
 use std::{
     array,
     ffi::{CString, c_char, c_void},
+    mem::offset_of,
     num::NonZeroU32,
     ptr::copy_nonoverlapping,
     sync::Arc,
@@ -25,7 +28,7 @@ use std::{
 use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
-    vk::{self, StructureType},
+    vk::{self, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags, StructureType},
 };
 
 use vk_mem::Alloc;
@@ -146,14 +149,16 @@ fn main() {
         (ls.width, ls.height)
     };
 
+    let image_format = vk::Format::B8G8R8A8_SRGB;
+
     println!("Creating swapchain...");
     let swapchain_loader = khr::swapchain::Device::new(&instance, &logical_device);
-    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, win_size)
+    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, image_format, win_size)
         .expect("Error creating the swapchain:");
 
     let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
 
-    let (depth_image, mut depth_image_alloc, depth_image_view) = get_depth_image(
+    let (depth_image, mut depth_image_alloc, depth_image_view, depth_format) = get_depth_image(
         &instance,
         &logical_device,
         physical_device,
@@ -164,7 +169,7 @@ fn main() {
 
     let (model_vertices, model_indices) = model::load();
 
-    let v_buf_size = size_of::<model::Vertex>() * model_vertices.len();
+    let v_buf_size = size_of::<Vertex>() * model_vertices.len();
     let i_buf_size = size_of::<u16>() * model_indices.len();
 
     let (buffer, buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
@@ -213,8 +218,204 @@ fn main() {
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
-    setup_descriptors(&logical_device, &textures, &texture_descriptors)
-        .expect("Could not set up descriptors");
+    let descriptor_set_layout_tex =
+        setup_descriptors(&logical_device, &textures, &texture_descriptors)
+            .expect("Could not set up descriptors");
+
+    let (vert_shader_module, frag_shader_module) =
+        shader::load_shader_module(&logical_device).expect("Could not load shaders");
+
+    let push_const_range = vk::PushConstantRange {
+        stage_flags: vk::ShaderStageFlags::VERTEX,
+        size: size_of::<vk::DeviceAddress>() as u32,
+        ..Default::default()
+    };
+
+    // TODO: actually add to the pipeline
+    let descriptor_bindings = [
+        DescriptorSetLayoutBinding {
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            binding: 0,
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            ..Default::default()
+        },
+        DescriptorSetLayoutBinding {
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+            binding: 1,
+            stage_flags: vk::ShaderStageFlags::VERTEX,
+            ..Default::default()
+        },
+        DescriptorSetLayoutBinding {
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            binding: 2,
+            stage_flags: vk::ShaderStageFlags::FRAGMENT,
+            ..Default::default()
+        },
+    ];
+
+    let descriptor_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        binding_count: 3,
+        p_bindings: descriptor_bindings.as_ptr(),
+        ..Default::default()
+    };
+
+    // let descriptor_set_layout = unsafe { logical_device.create_descriptor_set_layout(&descriptor_set_layout_create_info, None).expect("fuck") };
+
+    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
+        s_type: StructureType::PIPELINE_LAYOUT_CREATE_INFO,
+        set_layout_count: 1,
+        p_set_layouts: &descriptor_set_layout_tex,
+        push_constant_range_count: 1,
+        p_push_constant_ranges: &push_const_range,
+        // set_layout_count: 1,
+        // p_set_layouts: &descriptor_set_layout,
+        ..Default::default()
+    };
+
+    let pipeline_layout = unsafe {
+        logical_device
+            .create_pipeline_layout(&pipeline_layout_create_info, None)
+            .expect("Could not create pipeline layout")
+    };
+
+    let vertex_binding = vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: size_of::<Vertex>() as u32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    };
+
+    let vertex_attributes = [
+        vk::VertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            ..Default::default()
+        },
+        vk::VertexInputAttributeDescription {
+            location: 1,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            offset: offset_of!(Vertex, normal) as u32,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 2,
+            binding: 0,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: offset_of!(Vertex, uv) as u32,
+        },
+    ];
+
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
+        s_type: StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        vertex_binding_description_count: 1,
+        p_vertex_binding_descriptions: &vertex_binding,
+        vertex_attribute_description_count: vertex_attributes.len() as u32,
+        p_vertex_attribute_descriptions: vertex_attributes.as_ptr(),
+        ..Default::default()
+    };
+
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
+        s_type: StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+        ..Default::default()
+    };
+
+    let shader_stages = vec![
+        vk::PipelineShaderStageCreateInfo {
+            s_type: StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage: vk::ShaderStageFlags::VERTEX,
+            module: vert_shader_module,
+            p_name: c"main".as_ptr(),
+            ..Default::default()
+        },
+        vk::PipelineShaderStageCreateInfo {
+            s_type: StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage: vk::ShaderStageFlags::FRAGMENT,
+            module: frag_shader_module,
+            p_name: c"main".as_ptr(),
+            ..Default::default()
+        },
+    ];
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo {
+        s_type: StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        viewport_count: 1,
+        scissor_count: 1,
+        ..Default::default()
+    };
+
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo {
+        s_type: StructureType::PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        dynamic_state_count: 2,
+        p_dynamic_states: dynamic_states.as_ptr(),
+        ..Default::default()
+    };
+
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo {
+        s_type: StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        depth_test_enable: vk::TRUE,
+        depth_write_enable: vk::TRUE,
+        depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+        ..Default::default()
+    };
+
+    let rendering_create_info = vk::PipelineRenderingCreateInfo {
+        s_type: StructureType::PIPELINE_RENDERING_CREATE_INFO,
+        color_attachment_count: 1,
+        p_color_attachment_formats: &image_format,
+        depth_attachment_format: depth_format,
+        ..Default::default()
+    };
+
+    let blend_attachment = vk::PipelineColorBlendAttachmentState {
+        color_write_mask: vk::ColorComponentFlags::from_raw(0xF),
+        ..Default::default()
+    };
+
+    let colour_blend_state = vk::PipelineColorBlendStateCreateInfo {
+        s_type: StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        attachment_count: 1,
+        p_attachments: &blend_attachment,
+        ..Default::default()
+    };
+
+    let raster_state = vk::PipelineRasterizationStateCreateInfo {
+        s_type: StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        line_width: 1.0,
+        ..Default::default()
+    };
+
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo {
+        s_type: StructureType::PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        rasterization_samples: vk::SampleCountFlags::TYPE_1,
+        ..Default::default()
+    };
+
+    let pipeline_create_info = vk::GraphicsPipelineCreateInfo {
+        s_type: StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
+        p_next: &rendering_create_info as *const _ as *const c_void,
+        stage_count: 2,
+        p_stages: shader_stages.as_ptr(),
+        p_vertex_input_state: &vertex_input_state,
+        p_input_assembly_state: &input_assembly_state,
+        p_viewport_state: &viewport_state,
+        p_rasterization_state: &raster_state,
+        p_multisample_state: &multisample_state,
+        p_depth_stencil_state: &depth_stencil_state,
+        p_color_blend_state: &colour_blend_state,
+        p_dynamic_state: &dynamic_state,
+        layout: pipeline_layout,
+        ..Default::default()
+    };
+
+    let pipeline = unsafe {
+        logical_device
+            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+            .expect("fuck")
+    };
 
     evl.run_app(&mut app).unwrap();
 }
@@ -318,6 +519,7 @@ fn get_logical_device(
         descriptor_binding_variable_descriptor_count: vk::TRUE,
         runtime_descriptor_array: vk::TRUE,
         buffer_device_address: vk::TRUE,
+        shader_sampled_image_array_non_uniform_indexing: vk::TRUE,
         ..Default::default()
     };
 
@@ -352,10 +554,9 @@ fn create_swapchain(
     swapchain_loader: &khr::swapchain::Device,
     surface: vk::SurfaceKHR,
     sf_caps: &vk::SurfaceCapabilitiesKHR,
+    image_format: vk::Format,
     (width, height): (u32, u32),
 ) -> VkResult<vk::SwapchainKHR> {
-    let image_format = vk::Format::B8G8R8A8_SRGB;
-
     let swapchain_info = vk::SwapchainCreateInfoKHR {
         s_type: StructureType::SWAPCHAIN_CREATE_INFO_KHR,
         surface,
@@ -380,7 +581,7 @@ fn get_depth_image(
     physical_device: vk::PhysicalDevice,
     (width, height): (u32, u32),
     vk_alloc: &vk_mem::Allocator,
-) -> VkResult<(vk::Image, vk_mem::Allocation, vk::ImageView)> {
+) -> VkResult<(vk::Image, vk_mem::Allocation, vk::ImageView, vk::Format)> {
     let depth_formats = [
         vk::Format::D32_SFLOAT_S8_UINT,
         vk::Format::D24_UNORM_S8_UINT,
@@ -452,7 +653,7 @@ fn get_depth_image(
 
     let image_view = unsafe { logical_device.create_image_view(&view_info, None)? };
 
-    Ok((depth_image.0, depth_image.1, image_view))
+    Ok((depth_image.0, depth_image.1, image_view, depth_format))
 }
 
 fn get_buffer(
@@ -830,7 +1031,7 @@ fn setup_descriptors(
     logical_device: &Device,
     textures: &Vec<Texture>,
     texture_descriptors: &Vec<vk::DescriptorImageInfo>,
-) -> VkResult<()> {
+) -> VkResult<vk::DescriptorSetLayout> {
     let desc_variable_flag = vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
 
     let desc_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
@@ -909,7 +1110,7 @@ fn setup_descriptors(
         logical_device.update_descriptor_sets(&[write_desc_set], &[]);
     };
 
-    Ok(())
+    Ok(descriptor_set_layout_tex)
 }
 
 // TODO: alongside a flag for this, add option to manually set device
