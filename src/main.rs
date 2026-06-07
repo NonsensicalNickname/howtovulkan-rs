@@ -10,6 +10,7 @@ use model::Vertex;
 use window::AppWindow;
 
 use winit::{
+    application::ApplicationHandler,
     dpi::LogicalSize,
     event_loop::{ControlFlow, EventLoop},
     raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle},
@@ -21,6 +22,7 @@ use std::{
     ffi::{CString, c_char, c_void},
     mem::offset_of,
     num::NonZeroU32,
+    ops::Mul,
     ptr::copy_nonoverlapping,
     sync::Arc,
 };
@@ -43,10 +45,10 @@ const DISPLAY_SCALING: f64 = 1.0;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
 struct ShaderData {
-    proj: glm::Mat4,
-    view: glm::Mat4,
-    model: [glm::Mat4; 3],
-    light_pos: glm::Vec4,
+    proj: nalgebra_glm::Mat4,
+    view: nalgebra_glm::Mat4,
+    model: [nalgebra_glm::Mat4; 3],
+    light_pos: nalgebra_glm::Vec4,
     selected: u32,
 }
 
@@ -144,6 +146,7 @@ fn main() {
             .unwrap()
     };
 
+    // TODO: Add case for non-wayland surfaces
     let win_size = {
         let ls = window.inner_size().to_logical::<u32>(DISPLAY_SCALING);
         (ls.width, ls.height)
@@ -157,6 +160,28 @@ fn main() {
         .expect("Error creating the swapchain:");
 
     let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
+
+    let swapchain_image_views = swapchain_images
+        .iter()
+        .map(|image| {
+            let view_create_info = vk::ImageViewCreateInfo {
+                s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
+                image: *image,
+                view_type: vk::ImageViewType::TYPE_2D,
+                format: image_format,
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            };
+
+            unsafe { logical_device.create_image_view(&view_create_info, None) }
+        })
+        .collect::<Result<Vec<vk::ImageView>, vk::Result>>()
+        .expect("Could not create image views from swapchain");
 
     let (depth_image, mut depth_image_alloc, depth_image_view, depth_format) = get_depth_image(
         &instance,
@@ -218,13 +243,14 @@ fn main() {
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
-    let descriptor_set_layout = setup_descriptors(&logical_device, &textures, &texture_descriptors)
-        .expect("Could not set up descriptors");
+    let (descriptor_set, descriptor_set_layout) =
+        setup_descriptors(&logical_device, &textures, &texture_descriptors)
+            .expect("Could not set up descriptors");
 
     let (vert_shader_module, frag_shader_module) =
         shader::load_shader_module(&logical_device).expect("Could not load shaders");
 
-    let pipeline = setup_pipeline(
+    let (pipeline, pipeline_layout) = setup_pipeline(
         &logical_device,
         vert_shader_module,
         frag_shader_module,
@@ -233,6 +259,254 @@ fn main() {
         depth_format,
     )
     .expect("Could not set up the graphics pipeline");
+
+    let mut last_time = std::time::Instant::now();
+    let mut quit = false;
+
+    let mut image_idx: usize = 0;
+    let mut frame_idx: usize = 0;
+
+    let mut cam_pos = nalgebra_glm::vec3(0.0, 0.0, -6.0);
+    let mut obj_rotations = [nalgebra_glm::vec3(0.0, 0.0, 0.0); 3];
+
+    println!("Starting render loop");
+
+    while !quit {
+        unsafe {
+            // Wait for GPU
+            logical_device
+                .wait_for_fences(&[fences[frame_idx]], true, u64::MAX)
+                .expect("Could not wait for fence");
+            logical_device
+                .reset_fences(&[fences[frame_idx]])
+                .expect("Could not reset fence");
+
+            image_idx = swapchain_loader
+                .acquire_next_image(
+                    swapchain,
+                    u64::MAX,
+                    present_semaphores[frame_idx],
+                    vk::Fence::null(),
+                )
+                .expect("Could not acquire next image from swapchain")
+                .0 as usize;
+        }
+
+        let proj = nalgebra_glm::perspective(
+            nalgebra_glm::radians(&nalgebra_glm::vec1(45.0)).x,
+            win_size.0 as f32 / win_size.1 as f32,
+            0.1,
+            32.0,
+        );
+
+        let view = nalgebra_glm::translate(
+            &nalgebra_glm::mat4(
+                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+            ),
+            &cam_pos,
+        );
+
+        let model: [nalgebra_glm::Mat4; 3] = array::from_fn(|idx| {
+            let instance_pos = nalgebra_glm::vec3((idx as f32 - 1.0) * 3.0, 0.0, 0.0);
+
+            let quat = nalgebra_glm::quat_to_mat4(&nalgebra_glm::quat(
+                obj_rotations[idx].x,
+                obj_rotations[idx].y,
+                obj_rotations[idx].z,
+                0.0,
+            ));
+
+            nalgebra_glm::translate(
+                &nalgebra_glm::mat4(
+                    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
+                ),
+                &instance_pos,
+            ) * quat
+        });
+
+        let shader_data = ShaderData {
+            proj,
+            view,
+            model,
+            light_pos: nalgebra_glm::vec4(0.0, -10.0, 10.0, 0.0),
+            selected: 1,
+        };
+
+        unsafe {
+            copy_nonoverlapping(
+                &shader_data as *const _ as *const c_void,
+                shader_data_buffers[frame_idx].alloc_info.mapped_data,
+                1,
+            );
+        }
+
+        let command_buffer = command_buffers[frame_idx];
+        let command_buffer_begin_info = vk::CommandBufferBeginInfo {
+            s_type: StructureType::COMMAND_BUFFER_BEGIN_INFO,
+            flags: vk::CommandBufferUsageFlags::ONE_TIME_SUBMIT,
+            ..Default::default()
+        };
+
+        unsafe {
+            logical_device
+                .reset_command_buffer(command_buffer, vk::CommandBufferResetFlags::empty())
+                .unwrap();
+            logical_device
+                .begin_command_buffer(command_buffer, &command_buffer_begin_info)
+                .unwrap();
+        }
+
+        let output_barriers = [
+            vk::ImageMemoryBarrier2 {
+                s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
+                src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                src_access_mask: vk::AccessFlags2::empty(),
+                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ
+                    | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::ATTACHMENT_OPTIMAL,
+                image: swapchain_images[image_idx],
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::COLOR,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+            vk::ImageMemoryBarrier2 {
+                s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
+                src_stage_mask: vk::PipelineStageFlags2::LATE_FRAGMENT_TESTS,
+                src_access_mask: vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                dst_stage_mask: vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
+                dst_access_mask: vk::AccessFlags2::DEPTH_STENCIL_ATTACHMENT_WRITE,
+                old_layout: vk::ImageLayout::UNDEFINED,
+                new_layout: vk::ImageLayout::ATTACHMENT_OPTIMAL,
+                image: depth_image,
+                subresource_range: vk::ImageSubresourceRange {
+                    aspect_mask: vk::ImageAspectFlags::DEPTH | vk::ImageAspectFlags::STENCIL,
+                    level_count: 1,
+                    layer_count: 1,
+                    ..Default::default()
+                },
+                ..Default::default()
+            },
+        ];
+
+        let barrier_dependency_info = vk::DependencyInfo {
+            s_type: StructureType::DEPENDENCY_INFO,
+            image_memory_barrier_count: 2,
+            p_image_memory_barriers: output_barriers.as_ptr(),
+            ..Default::default()
+        };
+
+        unsafe {
+            logical_device.cmd_pipeline_barrier2(command_buffer, &barrier_dependency_info);
+        }
+
+        let colour_attachment_info = vk::RenderingAttachmentInfo {
+            s_type: StructureType::RENDERING_ATTACHMENT_INFO,
+            image_view: swapchain_image_views[image_idx],
+            image_layout: vk::ImageLayout::ATTACHMENT_OPTIMAL,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::STORE,
+            clear_value: vk::ClearValue {
+                color: vk::ClearColorValue {
+                    float32: [0.0, 0.0, 0.2, 1.0],
+                },
+            },
+            ..Default::default()
+        };
+
+        let depth_attachment_info = vk::RenderingAttachmentInfo {
+            s_type: StructureType::RENDERING_ATTACHMENT_INFO,
+            image_view: depth_image_view,
+            image_layout: vk::ImageLayout::ATTACHMENT_OPTIMAL,
+            load_op: vk::AttachmentLoadOp::CLEAR,
+            store_op: vk::AttachmentStoreOp::DONT_CARE,
+            clear_value: vk::ClearValue {
+                depth_stencil: vk::ClearDepthStencilValue {
+                    depth: 1.0,
+                    stencil: 0,
+                },
+            },
+            ..Default::default()
+        };
+
+        let render_info = vk::RenderingInfo {
+            s_type: StructureType::RENDERING_INFO,
+            render_area: vk::Rect2D {
+                extent: vk::Extent2D {
+                    width: win_size.0,
+                    height: win_size.1,
+                },
+                ..Default::default()
+            },
+            layer_count: 1,
+            color_attachment_count: 1,
+            p_color_attachments: &colour_attachment_info,
+            p_depth_attachment: &depth_attachment_info,
+            ..Default::default()
+        };
+
+        let viewport = vk::Viewport {
+            width: win_size.0 as f32,
+            height: win_size.1 as f32,
+            min_depth: 0.0,
+            max_depth: 1.0,
+            ..Default::default()
+        };
+
+        let scissor = vk::Rect2D {
+            extent: vk::Extent2D {
+                width: win_size.0,
+                height: win_size.1,
+            },
+            ..Default::default()
+        };
+
+        let v_offset: vk::DeviceSize = 0;
+
+        unsafe {
+            logical_device.cmd_set_viewport(command_buffer, 0, &[viewport]);
+            logical_device.cmd_set_scissor(command_buffer, 0, &[scissor]);
+
+            logical_device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline,
+            );
+
+            logical_device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                pipeline_layout,
+                0,
+                &[descriptor_set],
+                &[],
+            );
+
+            logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[buffer], &[v_offset]);
+            logical_device.cmd_bind_index_buffer(
+                command_buffer,
+                buffer,
+                v_buf_size as vk::DeviceSize,
+                vk::IndexType::UINT16,
+            );
+
+            logical_device.cmd_push_constants(
+                command_buffer,
+                pipeline_layout,
+                vk::ShaderStageFlags::VERTEX,
+                0,
+                std::slice::from_raw_parts(
+                    shader_data_buffers[frame_idx].device_address as *const u8,
+                    shader_data_buffers[frame_idx].alloc_info.size as usize,
+                ),
+            );
+        }
+    }
 
     // good idea: send window event after doing as much as possible per loop iter
     evl.run_app(&mut app).unwrap();
@@ -849,30 +1123,27 @@ fn setup_descriptors(
     logical_device: &Device,
     textures: &Vec<Texture>,
     texture_descriptors: &Vec<vk::DescriptorImageInfo>,
-) -> VkResult<vk::DescriptorSetLayout> {
-    let desc_variable_flag = [
-        vk::DescriptorBindingFlags::empty(),
-        vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT,
-    ];
+) -> VkResult<(vk::DescriptorSet, vk::DescriptorSetLayout)> {
+    let desc_variable_flag = [vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT];
 
     let desc_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
-        binding_count: 2,
+        binding_count: 1,
         p_binding_flags: desc_variable_flag.as_ptr(),
         ..Default::default()
     };
 
     let bindings = &[
-        vk::DescriptorSetLayoutBinding {
-            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-            binding: 0,
-            stage_flags: vk::ShaderStageFlags::VERTEX,
-            ..Default::default()
-        },
+        // vk::DescriptorSetLayoutBinding {
+        //     descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+        //     binding: 0,
+        //     stage_flags: vk::ShaderStageFlags::VERTEX,
+        //     ..Default::default()
+        // },
         vk::DescriptorSetLayoutBinding {
             descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             descriptor_count: textures.len() as u32,
-            binding: 1,
+            binding: 0,
             stage_flags: vk::ShaderStageFlags::FRAGMENT,
             ..Default::default()
         },
@@ -881,7 +1152,7 @@ fn setup_descriptors(
     let desc_layout_tex_create_info = vk::DescriptorSetLayoutCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
         p_next: &desc_binding_flags as *const _ as *const c_void,
-        binding_count: 2,
+        binding_count: 1,
         p_bindings: bindings.as_ptr(),
         ..Default::default()
     };
@@ -929,7 +1200,7 @@ fn setup_descriptors(
     let write_desc_set = vk::WriteDescriptorSet {
         s_type: StructureType::WRITE_DESCRIPTOR_SET,
         dst_set: descriptor_set_tex,
-        dst_binding: 1,
+        dst_binding: 0,
         descriptor_count: texture_descriptors.len() as u32,
         descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         p_image_info: texture_descriptors.as_ptr(),
@@ -940,7 +1211,7 @@ fn setup_descriptors(
         logical_device.update_descriptor_sets(&[write_desc_set], &[]);
     };
 
-    Ok(descriptor_set_layout)
+    Ok((descriptor_set_tex, descriptor_set_layout))
 }
 
 fn setup_pipeline(
@@ -950,7 +1221,7 @@ fn setup_pipeline(
     descriptor_set_layout: vk::DescriptorSetLayout,
     image_format: vk::Format,
     depth_format: vk::Format,
-) -> VkResult<vk::Pipeline> {
+) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
     let push_const_range = vk::PushConstantRange {
         stage_flags: vk::ShaderStageFlags::VERTEX,
         size: size_of::<vk::DeviceAddress>() as u32,
@@ -1101,11 +1372,14 @@ fn setup_pipeline(
         ..Default::default()
     };
 
-    Ok(unsafe {
-        logical_device
-            .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
-            .map_err(|e| e.1)?[0]
-    })
+    Ok((
+        unsafe {
+            logical_device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+                .map_err(|e| e.1)?[0]
+        },
+        pipeline_layout,
+    ))
 }
 
 // TODO: alongside a flag for this, add option to manually set device

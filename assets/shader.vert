@@ -1,6 +1,6 @@
 #version 450 core
 
-layout (set = 0, binding = 0) uniform ShaderData {
+layout (push_constant) uniform ShaderData {
     mat4 projection;
     mat4 view;
     mat4 model[3];
