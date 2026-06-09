@@ -3,7 +3,7 @@
 
 layout (set = 1, binding = 0) uniform sampler2D textures[];
 
-layout(location = 3) out vec4 Colour;
+layout(location = 0) out vec4 Colour;
 
 layout (location = 3) in vec4 Pos; 
 layout (location = 4) in vec3 Normal;

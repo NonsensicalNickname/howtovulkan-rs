@@ -194,6 +194,8 @@ fn main() {
 
     let (model_vertices, model_indices) = model::load();
 
+    let index_count = model_indices.len() as u32;
+
     let v_buf_size = size_of::<Vertex>() * model_vertices.len();
     let i_buf_size = size_of::<u16>() * model_indices.len();
 
@@ -266,7 +268,7 @@ fn main() {
     .expect("Could not set up the graphics pipeline");
 
     let mut last_time = std::time::Instant::now();
-    let mut quit = true;
+    let mut quit = false;
 
     let mut image_idx: usize = 0;
     let mut frame_idx: usize = 0;
@@ -480,6 +482,8 @@ fn main() {
         let v_offset: vk::DeviceSize = 0;
 
         unsafe {
+            logical_device.cmd_begin_rendering(command_buffer, &render_info);
+
             logical_device.cmd_set_viewport(command_buffer, 0, &[viewport]);
             logical_device.cmd_set_scissor(command_buffer, 0, &[scissor]);
 
@@ -505,6 +509,79 @@ fn main() {
                 v_buf_size as vk::DeviceSize,
                 vk::IndexType::UINT16,
             );
+
+            logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+
+            logical_device.cmd_end_rendering(command_buffer);
+        }
+
+        let barrier_present = vk::ImageMemoryBarrier2 {
+            s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
+            src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            src_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
+            dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+            dst_access_mask: vk::AccessFlags2::from_raw(0),
+            old_layout: vk::ImageLayout::ATTACHMENT_OPTIMAL,
+            new_layout: vk::ImageLayout::PRESENT_SRC_KHR,
+            image: swapchain_images[image_idx],
+            subresource_range: vk::ImageSubresourceRange {
+                aspect_mask: vk::ImageAspectFlags::COLOR,
+                level_count: 1,
+                layer_count: 1,
+                ..Default::default()
+            },
+            ..Default::default()
+        };
+
+        let barrier_present_dependencies = vk::DependencyInfo {
+            s_type: StructureType::DEPENDENCY_INFO,
+            image_memory_barrier_count: 1,
+            p_image_memory_barriers: &barrier_present,
+            ..Default::default()
+        };
+
+        unsafe {
+            logical_device.cmd_pipeline_barrier2(command_buffer, &barrier_present_dependencies);
+            logical_device
+                .end_command_buffer(command_buffer)
+                .expect("Could not end the current command buffer");
+        }
+
+        let wait_stages = vk::PipelineStageFlags::COLOR_ATTACHMENT_OUTPUT;
+        let submit_info = vk::SubmitInfo {
+            s_type: StructureType::SUBMIT_INFO,
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &present_semaphores[frame_idx],
+            p_wait_dst_stage_mask: &wait_stages,
+            command_buffer_count: 1,
+            p_command_buffers: &command_buffer,
+            signal_semaphore_count: 1,
+            p_signal_semaphores: &render_semaphores[image_idx],
+            ..Default::default()
+        };
+
+        unsafe {
+            logical_device
+                .queue_submit(queue, &[submit_info], fences[frame_idx])
+                .expect("Could not submit queue");
+        }
+
+        frame_idx = (frame_idx + 1) % MAX_FRAMES_IN_FLIGHT;
+
+        let present_info = vk::PresentInfoKHR {
+            s_type: StructureType::PRESENT_INFO_KHR,
+            wait_semaphore_count: 1,
+            p_wait_semaphores: &render_semaphores[image_idx],
+            swapchain_count: 1,
+            p_swapchains: &swapchain,
+            p_image_indices: &(image_idx as u32),
+            ..Default::default()
+        };
+
+        unsafe {
+            swapchain_loader
+                .queue_present(queue, &present_info)
+                .expect("Could not acquire next image from swapchain");
         }
     }
 
