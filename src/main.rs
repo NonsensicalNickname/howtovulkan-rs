@@ -501,18 +501,6 @@ fn main() {
                 v_buf_size as vk::DeviceSize,
                 vk::IndexType::UINT16,
             );
-
-            // To be replaced by updating uniform buffer
-            // logical_device.cmd_push_constants(
-            //     command_buffer,
-            //     pipeline_layout,
-            //     vk::ShaderStageFlags::VERTEX,
-            //     0,
-            //     std::slice::from_raw_parts(
-            //         shader_data_buffers[frame_idx].device_address as *const u8,
-            //         shader_data_buffers[frame_idx].alloc_info.size as usize,
-            //     ),
-            // );
         }
     }
 
@@ -1160,7 +1148,7 @@ fn setup_descriptors(
     let texture_binding = vk::DescriptorSetLayoutBinding {
         descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
         descriptor_count: textures.len() as u32,
-        binding: 1,
+        binding: 0,
         stage_flags: vk::ShaderStageFlags::FRAGMENT,
         ..Default::default()
     };
@@ -1255,7 +1243,7 @@ fn setup_descriptors(
         vk::WriteDescriptorSet {
             s_type: StructureType::WRITE_DESCRIPTOR_SET,
             dst_set: texture_desc_set,
-            dst_binding: 1,
+            dst_binding: 0,
             descriptor_count: texture_descriptors.len() as u32,
             descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             p_image_info: texture_descriptors.as_ptr(),
@@ -1309,18 +1297,10 @@ fn setup_pipeline(
     image_format: vk::Format,
     depth_format: vk::Format,
 ) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
-    let push_const_range = vk::PushConstantRange {
-        stage_flags: vk::ShaderStageFlags::VERTEX,
-        size: size_of::<vk::DeviceAddress>() as u32,
-        ..Default::default()
-    };
-
     let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
         s_type: StructureType::PIPELINE_LAYOUT_CREATE_INFO,
         set_layout_count: 2,
         p_set_layouts: descriptor_set_layouts.as_ptr(),
-        push_constant_range_count: 1,
-        p_push_constant_ranges: &push_const_range,
         ..Default::default()
     };
 
