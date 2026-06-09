@@ -1,7 +1,7 @@
 #version 450 core
 #extension GL_EXT_nonuniform_qualifier : enable
 
-layout (set = 0, binding = 0) uniform sampler2D textures[];
+layout (set = 1, binding = 1) uniform sampler2D textures[];
 
 layout(location = 3) out vec4 Colour;
 

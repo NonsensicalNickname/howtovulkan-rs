@@ -56,7 +56,7 @@ struct ShaderDataBuffer {
     alloc: vk_mem::Allocation,
     alloc_info: vk_mem::AllocationInfo,
     buffer: vk::Buffer,
-    device_address: vk::DeviceAddress,
+    // device_address: vk::DeviceAddress,
 }
 
 struct Texture {
@@ -243,9 +243,14 @@ fn main() {
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
-    let (descriptor_set, descriptor_set_layout) =
-        setup_descriptors(&logical_device, &textures, &texture_descriptors)
-            .expect("Could not set up descriptors");
+    let (shader_data_set, shader_data_set_layout, texture_set, texture_set_layout) =
+        setup_descriptors(
+            &logical_device,
+            &textures,
+            &texture_descriptors,
+            &shader_data_buffers[0],
+        )
+        .expect("Could not set up descriptors");
 
     let (vert_shader_module, frag_shader_module) =
         shader::load_shader_module(&logical_device).expect("Could not load shaders");
@@ -254,14 +259,14 @@ fn main() {
         &logical_device,
         vert_shader_module,
         frag_shader_module,
-        descriptor_set_layout,
+        &[shader_data_set_layout, texture_set_layout],
         image_format,
         depth_format,
     )
     .expect("Could not set up the graphics pipeline");
 
     let mut last_time = std::time::Instant::now();
-    let mut quit = false;
+    let mut quit = true;
 
     let mut image_idx: usize = 0;
     let mut frame_idx: usize = 0;
@@ -339,6 +344,8 @@ fn main() {
                 1,
             );
         }
+
+        // Update uniform buffer
 
         let command_buffer = command_buffers[frame_idx];
         let command_buffer_begin_info = vk::CommandBufferBeginInfo {
@@ -483,7 +490,7 @@ fn main() {
                 vk::PipelineBindPoint::GRAPHICS,
                 pipeline_layout,
                 0,
-                &[descriptor_set],
+                &[shader_data_set, texture_set],
                 &[],
             );
 
@@ -495,16 +502,17 @@ fn main() {
                 vk::IndexType::UINT16,
             );
 
-            logical_device.cmd_push_constants(
-                command_buffer,
-                pipeline_layout,
-                vk::ShaderStageFlags::VERTEX,
-                0,
-                std::slice::from_raw_parts(
-                    shader_data_buffers[frame_idx].device_address as *const u8,
-                    shader_data_buffers[frame_idx].alloc_info.size as usize,
-                ),
-            );
+            // To be replaced by updating uniform buffer
+            // logical_device.cmd_push_constants(
+            //     command_buffer,
+            //     pipeline_layout,
+            //     vk::ShaderStageFlags::VERTEX,
+            //     0,
+            //     std::slice::from_raw_parts(
+            //         shader_data_buffers[frame_idx].device_address as *const u8,
+            //         shader_data_buffers[frame_idx].alloc_info.size as usize,
+            //     ),
+            // );
         }
     }
 
@@ -777,7 +785,7 @@ fn init_shader_data_buffers(
     let buffer_info = vk::BufferCreateInfo {
         s_type: StructureType::BUFFER_CREATE_INFO,
         size: size_of::<ShaderData>() as u64,
-        usage: vk::BufferUsageFlags::SHADER_DEVICE_ADDRESS,
+        usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
         ..Default::default()
     };
 
@@ -792,20 +800,20 @@ fn init_shader_data_buffers(
     array::from_fn(|_| {
         let (buffer, alloc) = unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info).unwrap() };
 
-        let buffer_device_address_info = vk::BufferDeviceAddressInfo {
-            s_type: StructureType::BUFFER_DEVICE_ADDRESS_INFO,
-            buffer,
-            ..Default::default()
-        };
+        // let buffer_device_address_info = vk::BufferDeviceAddressInfo {
+        //     s_type: StructureType::BUFFER_DEVICE_ADDRESS_INFO,
+        //     buffer,
+        //     ..Default::default()
+        // };
 
-        let device_address =
-            unsafe { logical_device.get_buffer_device_address(&buffer_device_address_info) };
+        // let device_address =
+        //     unsafe { logical_device.get_buffer_device_address(&buffer_device_address_info) };
 
         ShaderDataBuffer {
             alloc,
             alloc_info: vk_alloc.get_allocation_info(&alloc),
             buffer,
-            device_address,
+            // device_address,
         }
     })
 }
@@ -1123,102 +1131,181 @@ fn setup_descriptors(
     logical_device: &Device,
     textures: &Vec<Texture>,
     texture_descriptors: &Vec<vk::DescriptorImageInfo>,
-) -> VkResult<(vk::DescriptorSet, vk::DescriptorSetLayout)> {
-    let desc_variable_flag = [vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT];
+    shader_data_buffer: &ShaderDataBuffer,
+) -> VkResult<(
+    vk::DescriptorSet,
+    vk::DescriptorSetLayout,
+    vk::DescriptorSet,
+    vk::DescriptorSetLayout,
+)> {
+    let desc_variable_flag = vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
 
     let desc_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         binding_count: 1,
-        p_binding_flags: desc_variable_flag.as_ptr(),
+        p_binding_flags: &desc_variable_flag,
         ..Default::default()
     };
 
-    let bindings = &[
-        // vk::DescriptorSetLayoutBinding {
-        //     descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
-        //     binding: 0,
-        //     stage_flags: vk::ShaderStageFlags::VERTEX,
-        //     ..Default::default()
-        // },
-        vk::DescriptorSetLayoutBinding {
-            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+    // Bindings in separate sets since shader data
+    // is updated per frame
+    let shader_data_binding = vk::DescriptorSetLayoutBinding {
+        descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+        descriptor_count: 1,
+        binding: 0,
+        stage_flags: vk::ShaderStageFlags::VERTEX,
+        ..Default::default()
+    };
+
+    let texture_binding = vk::DescriptorSetLayoutBinding {
+        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+        descriptor_count: textures.len() as u32,
+        binding: 1,
+        stage_flags: vk::ShaderStageFlags::FRAGMENT,
+        ..Default::default()
+    };
+
+    let shader_data_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        binding_count: 1,
+        p_bindings: &shader_data_binding,
+        ..Default::default()
+    };
+
+    let texture_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        p_next: &desc_binding_flags as *const _ as *const c_void,
+        binding_count: 1,
+        p_bindings: &texture_binding,
+        ..Default::default()
+    };
+
+    let (shader_data_set_layout, texture_set_layout) = unsafe {
+        (
+            logical_device
+                .create_descriptor_set_layout(&shader_data_set_layout_create_info, None)?,
+            logical_device.create_descriptor_set_layout(&texture_set_layout_create_info, None)?,
+        )
+    };
+
+    let pool_sizes = &[
+        // Shader data
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::UNIFORM_BUFFER,
+            descriptor_count: 1,
+            ..Default::default()
+        },
+        vk::DescriptorPoolSize {
+            ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             descriptor_count: textures.len() as u32,
-            binding: 0,
-            stage_flags: vk::ShaderStageFlags::FRAGMENT,
             ..Default::default()
         },
     ];
 
-    let desc_layout_tex_create_info = vk::DescriptorSetLayoutCreateInfo {
-        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        p_next: &desc_binding_flags as *const _ as *const c_void,
-        binding_count: 1,
-        p_bindings: bindings.as_ptr(),
-        ..Default::default()
-    };
-
-    let descriptor_set_layout =
-        unsafe { logical_device.create_descriptor_set_layout(&desc_layout_tex_create_info, None)? };
-
-    let pool_size = vk::DescriptorPoolSize {
-        ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-        descriptor_count: textures.len() as u32,
-        ..Default::default()
-    };
-
-    let desc_pool_create_info = vk::DescriptorPoolCreateInfo {
+    let pool_create_info = vk::DescriptorPoolCreateInfo {
         s_type: StructureType::DESCRIPTOR_POOL_CREATE_INFO,
-        max_sets: 1,
-        pool_size_count: 1,
-        p_pool_sizes: &pool_size,
+        max_sets: 2,
+        pool_size_count: 2,
+        p_pool_sizes: pool_sizes.as_ptr(),
         ..Default::default()
     };
 
     let descriptor_pool =
-        unsafe { logical_device.create_descriptor_pool(&desc_pool_create_info, None)? };
+        unsafe { logical_device.create_descriptor_pool(&pool_create_info, None)? };
 
     let variable_desc_count = textures.len() as u32;
     let variable_desc_count_alloc_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo {
         s_type: StructureType::DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
-        descriptor_set_count: 1,
-        p_descriptor_counts: &variable_desc_count,
+        descriptor_set_count: 2,
+        p_descriptor_counts: (&[1, variable_desc_count]).as_ptr(),
         ..Default::default()
     };
 
-    let tex_desc_set_alloc_info = vk::DescriptorSetAllocateInfo {
+    let descriptor_set_allocate_info = vk::DescriptorSetAllocateInfo {
         s_type: StructureType::DESCRIPTOR_SET_ALLOCATE_INFO,
         p_next: &variable_desc_count_alloc_info as *const _ as *const c_void,
         descriptor_pool,
-        descriptor_set_count: 1,
-        p_set_layouts: &descriptor_set_layout,
+        descriptor_set_count: 2,
+        p_set_layouts: [shader_data_set_layout, texture_set_layout].as_ptr(),
         ..Default::default()
     };
 
-    let descriptor_set_tex =
-        unsafe { logical_device.allocate_descriptor_sets(&tex_desc_set_alloc_info)? }[0];
+    let descriptor_sets =
+        unsafe { logical_device.allocate_descriptor_sets(&descriptor_set_allocate_info)? };
 
-    let write_desc_set = vk::WriteDescriptorSet {
+    let (shader_data_desc_set, texture_desc_set) = (descriptor_sets[0], descriptor_sets[1]);
+
+    let shader_buffer_info = vk::DescriptorBufferInfo {
+        buffer: shader_data_buffer.buffer,
+        offset: 0,
+        range: size_of::<ShaderData>() as u64,
+    };
+
+    let write_desc_sets = &[
+        // Shader data
+        vk::WriteDescriptorSet {
+            s_type: StructureType::WRITE_DESCRIPTOR_SET,
+            dst_set: shader_data_desc_set,
+            dst_binding: 0,
+            descriptor_count: 1,
+            descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+            p_buffer_info: &shader_buffer_info,
+            ..Default::default()
+        },
+        vk::WriteDescriptorSet {
+            s_type: StructureType::WRITE_DESCRIPTOR_SET,
+            dst_set: texture_desc_set,
+            dst_binding: 1,
+            descriptor_count: texture_descriptors.len() as u32,
+            descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
+            p_image_info: texture_descriptors.as_ptr(),
+            ..Default::default()
+        },
+    ];
+
+    unsafe {
+        logical_device.update_descriptor_sets(write_desc_sets, &[]);
+    };
+
+    Ok((
+        shader_data_desc_set,
+        shader_data_set_layout,
+        texture_desc_set,
+        texture_set_layout,
+    ))
+}
+
+fn update_shader_data_descriptor(
+    logical_device: &Device,
+    descriptor_set_tex: vk::DescriptorSet,
+    shader_data_buffer: &ShaderDataBuffer,
+) {
+    let shader_buffer_info = vk::DescriptorBufferInfo {
+        buffer: shader_data_buffer.buffer,
+        offset: 0,
+        range: size_of::<ShaderData>() as u64,
+    };
+
+    let write_desc_sets = vk::WriteDescriptorSet {
         s_type: StructureType::WRITE_DESCRIPTOR_SET,
         dst_set: descriptor_set_tex,
         dst_binding: 0,
-        descriptor_count: texture_descriptors.len() as u32,
-        descriptor_type: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
-        p_image_info: texture_descriptors.as_ptr(),
+        descriptor_count: 1,
+        descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
+        p_buffer_info: &shader_buffer_info,
         ..Default::default()
     };
 
-    unsafe {
-        logical_device.update_descriptor_sets(&[write_desc_set], &[]);
-    };
-
-    Ok((descriptor_set_tex, descriptor_set_layout))
+    // unsafe {
+    //     logical_device.update_descriptor_sets(&[write_desc_set], &[]);
+    // };
 }
 
 fn setup_pipeline(
     logical_device: &Device,
     vert_shader_module: vk::ShaderModule,
     frag_shader_module: vk::ShaderModule,
-    descriptor_set_layout: vk::DescriptorSetLayout,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
     image_format: vk::Format,
     depth_format: vk::Format,
 ) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
@@ -1230,8 +1317,8 @@ fn setup_pipeline(
 
     let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
         s_type: StructureType::PIPELINE_LAYOUT_CREATE_INFO,
-        set_layout_count: 1,
-        p_set_layouts: &descriptor_set_layout,
+        set_layout_count: 2,
+        p_set_layouts: descriptor_set_layouts.as_ptr(),
         push_constant_range_count: 1,
         p_push_constant_ranges: &push_const_range,
         ..Default::default()
