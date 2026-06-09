@@ -345,7 +345,11 @@ fn main() {
             );
         }
 
-        // Update uniform buffer
+        update_shader_data_descriptor(
+            &logical_device,
+            shader_data_set,
+            &shader_data_buffers[frame_idx],
+        );
 
         let command_buffer = command_buffers[frame_idx];
         let command_buffer_begin_info = vk::CommandBufferBeginInfo {
@@ -1265,7 +1269,7 @@ fn setup_descriptors(
 
 fn update_shader_data_descriptor(
     logical_device: &Device,
-    descriptor_set_tex: vk::DescriptorSet,
+    shader_data_set: vk::DescriptorSet,
     shader_data_buffer: &ShaderDataBuffer,
 ) {
     let shader_buffer_info = vk::DescriptorBufferInfo {
@@ -1274,9 +1278,9 @@ fn update_shader_data_descriptor(
         range: size_of::<ShaderData>() as u64,
     };
 
-    let write_desc_sets = vk::WriteDescriptorSet {
+    let write_desc_set = vk::WriteDescriptorSet {
         s_type: StructureType::WRITE_DESCRIPTOR_SET,
-        dst_set: descriptor_set_tex,
+        dst_set: shader_data_set,
         dst_binding: 0,
         descriptor_count: 1,
         descriptor_type: vk::DescriptorType::UNIFORM_BUFFER,
@@ -1284,9 +1288,9 @@ fn update_shader_data_descriptor(
         ..Default::default()
     };
 
-    // unsafe {
-    //     logical_device.update_descriptor_sets(&[write_desc_set], &[]);
-    // };
+    unsafe {
+        logical_device.update_descriptor_sets(&[write_desc_set], &[]);
+    };
 }
 
 fn setup_pipeline(
