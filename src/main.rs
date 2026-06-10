@@ -1,3 +1,5 @@
+#![feature(vec_from_fn)]
+
 mod extra_ktx;
 mod gl_format;
 mod model;
@@ -154,34 +156,35 @@ fn main() {
 
     let image_format = vk::Format::B8G8R8A8_SRGB;
 
+    let mut swapchain_create_info = vk::SwapchainCreateInfoKHR {
+        s_type: StructureType::SWAPCHAIN_CREATE_INFO_KHR,
+        surface,
+        min_image_count: sf_caps.min_image_count,
+        image_format,
+        image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
+        image_extent: vk::Extent2D {
+            width: win_size.0,
+            height: win_size.1,
+        },
+        image_array_layers: 1_u32,
+        image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
+        pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
+        composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
+        present_mode: vk::PresentModeKHR::FIFO,
+        ..Default::default()
+    };
+
     println!("Creating swapchain...");
     let swapchain_loader = khr::swapchain::Device::new(&instance, &logical_device);
-    let swapchain = create_swapchain(&swapchain_loader, surface, &sf_caps, image_format, win_size)
-        .expect("Error creating the swapchain:");
+    let (mut swapchain, mut swapchain_images, mut swapchain_image_views) = create_swapchain(
+        &logical_device,
+        &swapchain_loader,
+        &swapchain_create_info,
+        image_format,
+    )
+    .expect("Error creating the swapchain:");
 
-    let swapchain_images = unsafe { swapchain_loader.get_swapchain_images(swapchain).unwrap() };
-
-    let swapchain_image_views = swapchain_images
-        .iter()
-        .map(|image| {
-            let view_create_info = vk::ImageViewCreateInfo {
-                s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
-                image: *image,
-                view_type: vk::ImageViewType::TYPE_2D,
-                format: image_format,
-                subresource_range: vk::ImageSubresourceRange {
-                    aspect_mask: vk::ImageAspectFlags::COLOR,
-                    level_count: 1,
-                    layer_count: 1,
-                    ..Default::default()
-                },
-                ..Default::default()
-            };
-
-            unsafe { logical_device.create_image_view(&view_create_info, None) }
-        })
-        .collect::<Result<Vec<vk::ImageView>, vk::Result>>()
-        .expect("Could not create image views from swapchain");
+    let mut image_count = swapchain_images.len();
 
     let (depth_image, mut depth_image_alloc, depth_image_view, depth_format) = get_depth_image(
         &instance,
@@ -226,12 +229,12 @@ fn main() {
     let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
 
     let mut render_semaphores = Vec::<vk::Semaphore>::with_capacity(swapchain_images.len());
-    let (fences, present_semaphores) = init_sync_objects(
-        &logical_device,
-        swapchain_images.len(),
-        &mut render_semaphores,
-    )
-    .expect("Could not create synchronisation objects");
+
+    let (fences, present_semaphores, tmp, semaphore_create_info) =
+        init_sync_objects(&logical_device, swapchain_images.len(), render_semaphores)
+            .expect("Could not create synchronisation objects");
+
+    render_semaphores = tmp;
 
     let (mut command_pool, mut command_buffers) = create_command_buffers(&logical_device, qf_idx)
         .expect("Could not create command pool or buffers");
@@ -239,7 +242,7 @@ fn main() {
     let mut app = AppWindow {
         window: window.clone(),
         surface: Arc::new(surface),
-        surface_loader: Arc::new(surface_loader),
+        surface_loader: Arc::new(surface_loader.clone()),
     };
 
     let (textures, texture_descriptors) =
@@ -269,6 +272,7 @@ fn main() {
 
     let mut last_time = std::time::Instant::now();
     let mut quit = false;
+    let mut update_swapchain = false;
 
     let mut image_idx: usize = 0;
     let mut frame_idx: usize = 0;
@@ -288,15 +292,15 @@ fn main() {
                 .reset_fences(&[fences[frame_idx]])
                 .expect("Could not reset fence");
 
-            image_idx = swapchain_loader
+            let res = swapchain_loader
                 .acquire_next_image(
                     swapchain,
                     u64::MAX,
                     present_semaphores[frame_idx],
                     vk::Fence::null(),
                 )
-                .expect("Could not acquire next image from swapchain")
-                .0 as usize;
+                .expect("Could not acquire next image from swapchain");
+            (image_idx, update_swapchain) = (res.0 as usize, res.1);
         }
 
         let proj = nalgebra_glm::perspective(
@@ -579,9 +583,55 @@ fn main() {
         };
 
         unsafe {
-            swapchain_loader
+            update_swapchain = swapchain_loader
                 .queue_present(queue, &present_info)
                 .expect("Could not acquire next image from swapchain");
+        }
+
+        if update_swapchain {
+            println!("UPDATING SWAPCHAIN");
+            update_swapchain = false;
+
+            let surface_caps = unsafe {
+                logical_device.device_wait_idle().expect("Could not idle");
+                surface_loader
+                    .get_physical_device_surface_capabilities(physical_device, surface)
+                    .expect("Could not get surface caps")
+            };
+
+            swapchain_create_info.old_swapchain = swapchain;
+            swapchain_create_info.image_extent = vk::Extent2D {
+                width: win_size.0,
+                height: win_size.1,
+            };
+
+            unsafe {
+                for image_view in swapchain_image_views {
+                    logical_device.destroy_image_view(image_view, None);
+                }
+
+                image_count = swapchain_images.len();
+
+                (swapchain, swapchain_images, swapchain_image_views) = create_swapchain(
+                    &logical_device,
+                    &swapchain_loader,
+                    &swapchain_create_info,
+                    image_format,
+                )
+                .expect("Could not create swapchain");
+
+                for semaphore in render_semaphores {
+                    logical_device.destroy_semaphore(semaphore, None);
+                }
+
+                render_semaphores = Vec::from_fn(image_count, |_| {
+                    logical_device
+                        .create_semaphore(&semaphore_create_info, None)
+                        .expect("Could not create semaphore")
+                });
+
+                swapchain_loader.destroy_swapchain(swapchain_create_info.old_swapchain, None);
+            }
         }
     }
 
@@ -719,29 +769,37 @@ fn get_logical_device(
     unsafe { instance.create_device(physical_device, &logical_device_info, None) }
 }
 
-fn create_swapchain(
-    swapchain_loader: &khr::swapchain::Device,
-    surface: vk::SurfaceKHR,
-    sf_caps: &vk::SurfaceCapabilitiesKHR,
+fn create_swapchain<'a>(
+    logical_device: &'a Device,
+    swapchain_loader: &'a khr::swapchain::Device,
+    swapchain_create_info: &'a vk::SwapchainCreateInfoKHR,
     image_format: vk::Format,
-    (width, height): (u32, u32),
-) -> VkResult<vk::SwapchainKHR> {
-    let swapchain_info = vk::SwapchainCreateInfoKHR {
-        s_type: StructureType::SWAPCHAIN_CREATE_INFO_KHR,
-        surface,
-        min_image_count: sf_caps.min_image_count,
-        image_format,
-        image_color_space: vk::ColorSpaceKHR::SRGB_NONLINEAR,
-        image_extent: vk::Extent2D { width, height },
-        image_array_layers: 1_u32,
-        image_usage: vk::ImageUsageFlags::COLOR_ATTACHMENT,
-        pre_transform: vk::SurfaceTransformFlagsKHR::IDENTITY,
-        composite_alpha: vk::CompositeAlphaFlagsKHR::OPAQUE,
-        present_mode: vk::PresentModeKHR::FIFO,
-        ..Default::default()
-    };
+) -> VkResult<(vk::SwapchainKHR, Vec<vk::Image>, Vec<vk::ImageView>)> {
+    unsafe {
+        let swapchain = swapchain_loader.create_swapchain(&swapchain_create_info, None)?;
+        let swapchain_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
+        let swapchain_image_views = swapchain_images
+            .iter()
+            .map(|image| {
+                let view_create_info = vk::ImageViewCreateInfo {
+                    s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
+                    image: *image,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    format: image_format,
+                    subresource_range: vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::COLOR,
+                        level_count: 1,
+                        layer_count: 1,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
 
-    unsafe { swapchain_loader.create_swapchain(&swapchain_info, None) }
+                logical_device.create_image_view(&view_create_info, None)
+            })
+            .collect::<Result<Vec<vk::ImageView>, vk::Result>>()?;
+        Ok((swapchain, swapchain_images, swapchain_image_views))
+    }
 }
 
 fn get_depth_image(
@@ -887,13 +945,15 @@ fn init_shader_data_buffers(
     })
 }
 
-fn init_sync_objects(
-    logical_device: &Device,
+fn init_sync_objects<'a>(
+    logical_device: &'a Device,
     n_swapchain_images: usize,
-    render_semaphores: &mut Vec<vk::Semaphore>,
+    mut render_semaphores: Vec<vk::Semaphore>,
 ) -> VkResult<(
     [vk::Fence; MAX_FRAMES_IN_FLIGHT],
     [vk::Semaphore; MAX_FRAMES_IN_FLIGHT],
+    Vec<vk::Semaphore>,
+    vk::SemaphoreCreateInfo<'a>,
 )> {
     let semaphore_create_info = vk::SemaphoreCreateInfo {
         s_type: StructureType::SEMAPHORE_CREATE_INFO,
@@ -915,11 +975,16 @@ fn init_sync_objects(
 
     render_semaphores.resize(n_swapchain_images, vk::Semaphore::null());
 
-    for semaphore in render_semaphores {
+    for mut semaphore in &mut render_semaphores {
         *semaphore = unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }?;
     }
 
-    Ok((fences, present_semaphores))
+    Ok((
+        fences,
+        present_semaphores,
+        render_semaphores,
+        semaphore_create_info,
+    ))
 }
 
 fn create_command_buffers(
