@@ -51,6 +51,7 @@
             VK_LOADER_DEBUG= "all vulkaninfo";
 			VK_LAYER_PRINTF_TO_STDOUT = 1;
 			VK_VALIDATION_FEATURES = "+DEBUG_PRINTF";
+            VK_LAYER_PRINTF_BUFFER_SIZE = 65536;
 
             # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
         };

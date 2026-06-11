@@ -1,6 +1,7 @@
 #version 450 core
+#extension GL_EXT_debug_printf : enable
 
-layout (set = 0, binding = 0) uniform ShaderData {
+layout (std140, set = 0, binding = 0) uniform ShaderData {
     mat4 projection;
     mat4 view;
     mat4 model[3];
@@ -22,6 +23,8 @@ layout (location = 9) out uint outInstanceIndex;
 
 
 void main() {
+    // debugPrintfEXT("Shader Data from shader %u\n", shaderData.selected);
+
     mat4 modelMat = shaderData.model[gl_VertexIndex];
     outNormal = mat3(shaderData.view * modelMat) * Normal;
     outUV = UV;

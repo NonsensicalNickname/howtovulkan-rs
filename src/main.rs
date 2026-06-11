@@ -44,6 +44,8 @@ const MAKE_PRE_VK_SURFACE: bool = false;
 const DISPLAY_SCALING: f64 = 1.0;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
+#[repr(C)]
+#[derive(Debug)]
 struct ShaderData {
     proj: nalgebra_glm::Mat4,
     view: nalgebra_glm::Mat4,
@@ -56,7 +58,6 @@ struct ShaderDataBuffer {
     alloc: vk_mem::Allocation,
     alloc_info: vk_mem::AllocationInfo,
     buffer: vk::Buffer,
-    // device_address: vk::DeviceAddress,
 }
 
 struct Texture {
@@ -224,7 +225,7 @@ fn main() {
     drop(model_vertices);
     drop(model_indices);
 
-    let mut shader_data_buffers = init_shader_data_buffers(&vk_alloc, &logical_device);
+    let mut shader_data_buffer = init_shader_buffer(&vk_alloc, &logical_device);
 
     let mut render_semaphores = Vec::<vk::Semaphore>::with_capacity(swapchain_images.len());
 
@@ -251,7 +252,7 @@ fn main() {
             &logical_device,
             &textures,
             &texture_descriptors,
-            &shader_data_buffers[0],
+            &shader_data_buffer,
         )
         .expect("Could not set up descriptors");
 
@@ -341,15 +342,13 @@ fn main() {
             selected: 1,
         };
 
-        // unsafe {
-        //     copy_nonoverlapping(
-        //         &shader_data as *const _ as *const c_void,
-        //         shader_data_buffers[frame_idx].alloc_info.mapped_data,
-        //         1,
-        //     );
-        // }
-
-        update_shader_data_descriptor(&logical_device, &vk_alloc, shader_data_set, &shader_data);
+        update_shader_data_descriptor(
+            &logical_device,
+            &vk_alloc,
+            shader_data_set,
+            &shader_data,
+            &mut shader_data_buffer,
+        );
 
         let command_buffer = command_buffers[frame_idx];
         let command_buffer_begin_info = vk::CommandBufferBeginInfo {
@@ -372,7 +371,8 @@ fn main() {
                 s_type: StructureType::IMAGE_MEMORY_BARRIER_2,
                 src_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
                 src_access_mask: vk::AccessFlags2::empty(),
-                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT,
+                dst_stage_mask: vk::PipelineStageFlags2::COLOR_ATTACHMENT_OUTPUT
+                    | vk::PipelineStageFlags2::EARLY_FRAGMENT_TESTS,
                 dst_access_mask: vk::AccessFlags2::COLOR_ATTACHMENT_READ
                     | vk::AccessFlags2::COLOR_ATTACHMENT_WRITE,
                 old_layout: vk::ImageLayout::UNDEFINED,
@@ -769,7 +769,7 @@ fn get_logical_device(
         s_type: StructureType::DEVICE_CREATE_INFO,
         p_next: &mut enabled_vk13_features as *mut _ as *mut c_void,
         queue_create_info_count: 1_u32,
-        p_queue_create_infos: queue_create_info, // the bingus
+        p_queue_create_infos: queue_create_info,
         enabled_extension_count: logical_device_extensions.len() as u32,
         pp_enabled_extension_names: logical_device_extensions.as_ptr() as *const *const i8,
         p_enabled_features: &enabled_vk10_features,
@@ -915,10 +915,7 @@ fn get_buffer(
     Ok(unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info)? })
 }
 
-fn init_shader_data_buffers(
-    vk_alloc: &vk_mem::Allocator,
-    logical_device: &Device,
-) -> [ShaderDataBuffer; MAX_FRAMES_IN_FLIGHT] {
+fn init_shader_buffer(vk_alloc: &vk_mem::Allocator, logical_device: &Device) -> ShaderDataBuffer {
     let buffer_info = vk::BufferCreateInfo {
         s_type: StructureType::BUFFER_CREATE_INFO,
         size: size_of::<ShaderData>() as u64,
@@ -927,32 +924,19 @@ fn init_shader_data_buffers(
     };
 
     let alloc_info = vk_mem::AllocationCreateInfo {
-        usage: vk_mem::MemoryUsage::Auto,
-        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-            | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
-            | vk_mem::AllocationCreateFlags::MAPPED,
+        usage: vk_mem::MemoryUsage::CpuToGpu,
         ..Default::default()
     };
 
-    array::from_fn(|_| {
-        let (buffer, alloc) = unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info).unwrap() };
+    let (buffer, alloc) = unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info).unwrap() };
 
-        // let buffer_device_address_info = vk::BufferDeviceAddressInfo {
-        //     s_type: StructureType::BUFFER_DEVICE_ADDRESS_INFO,
-        //     buffer,
-        //     ..Default::default()
-        // };
+    let alloc_info = vk_alloc.get_allocation_info(&alloc);
 
-        // let device_address =
-        //     unsafe { logical_device.get_buffer_device_address(&buffer_device_address_info) };
-
-        ShaderDataBuffer {
-            alloc,
-            alloc_info: vk_alloc.get_allocation_info(&alloc),
-            buffer,
-            // device_address,
-        }
-    })
+    ShaderDataBuffer {
+        alloc,
+        alloc_info,
+        buffer,
+    }
 }
 
 fn init_sync_objects<'a>(
@@ -1424,34 +1408,19 @@ fn update_shader_data_descriptor(
     vk_alloc: &vk_mem::Allocator,
     shader_data_set: vk::DescriptorSet,
     shader_data: &ShaderData,
-) {
-    let buffer_info = vk::BufferCreateInfo {
-        s_type: StructureType::BUFFER_CREATE_INFO,
-        size: size_of::<ShaderData>() as u64,
-        usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
-        ..Default::default()
-    };
-
-    let alloc_info = vk_mem::AllocationCreateInfo {
-        usage: vk_mem::MemoryUsage::Auto,
-        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
-            | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
-            | vk_mem::AllocationCreateFlags::MAPPED,
-        ..Default::default()
-    };
-
-    let (buffer, alloc) = unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info).unwrap() };
+    shader_data_buffer: &mut ShaderDataBuffer,
+) -> VkResult<()> {
+    let p_shader_buffer = unsafe { vk_alloc.map_memory(&mut shader_data_buffer.alloc)? };
 
     unsafe {
-        copy_nonoverlapping(
-            &shader_data as *const _ as *const c_void,
-            vk_alloc.get_allocation_info(&alloc).mapped_data,
-            1,
+        p_shader_buffer.copy_from(
+            shader_data as *const _ as *const u8,
+            size_of::<ShaderData>(),
         );
     }
 
     let shader_buffer_info = vk::DescriptorBufferInfo {
-        buffer,
+        buffer: shader_data_buffer.buffer,
         offset: 0,
         range: size_of::<ShaderData>() as u64,
     };
@@ -1469,6 +1438,10 @@ fn update_shader_data_descriptor(
     unsafe {
         logical_device.update_descriptor_sets(&[write_desc_set], &[]);
     };
+
+    unsafe { vk_alloc.unmap_memory(&mut shader_data_buffer.alloc) }
+
+    Ok(())
 }
 
 fn setup_pipeline(
