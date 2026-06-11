@@ -1,9 +1,13 @@
 #version 450 core
 #extension GL_EXT_nonuniform_qualifier : enable
+#extension GL_EXT_debug_printf : enable
+
+// pursue the following
+// https://docs.mesa3d.org/spirv/index.html
 
 layout (set = 1, binding = 0) uniform sampler2D textures[];
 
-layout(location = 0) out vec4 Colour;
+layout (location = 0) out vec4 Colour;
 
 layout (location = 3) in vec4 Pos; 
 layout (location = 4) in vec3 Normal;
@@ -23,5 +27,7 @@ void main() {
 
     vec3 color = texture(textures[nonuniformEXT(InstanceIndex)], UV).rgb * Factor;
     
-    Colour = vec4(diffuse * color.rgb + specular, 1.0);
+    debugPrintfEXT("Fragment color: %f, %f, %f", color.r, color.g, color.b);
+    //Colour = vec4(diffuse * color.rgb + specular, 1.0);
+    Colour = vec4(1.0,1.0,1.0, 1.0);
 }

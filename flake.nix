@@ -49,6 +49,8 @@
             VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
             LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
             VK_LOADER_DEBUG= "all vulkaninfo";
+			VK_LAYER_PRINTF_TO_STDOUT = 1;
+			VK_VALIDATION_FEATURES = "+DEBUG_PRINTF";
 
             # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
         };

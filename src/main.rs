@@ -1,5 +1,3 @@
-#![feature(vec_from_fn)]
-
 mod extra_ktx;
 mod gl_format;
 mod model;
@@ -343,19 +341,15 @@ fn main() {
             selected: 1,
         };
 
-        unsafe {
-            copy_nonoverlapping(
-                &shader_data as *const _ as *const c_void,
-                shader_data_buffers[frame_idx].alloc_info.mapped_data,
-                1,
-            );
-        }
+        // unsafe {
+        //     copy_nonoverlapping(
+        //         &shader_data as *const _ as *const c_void,
+        //         shader_data_buffers[frame_idx].alloc_info.mapped_data,
+        //         1,
+        //     );
+        // }
 
-        update_shader_data_descriptor(
-            &logical_device,
-            shader_data_set,
-            &shader_data_buffers[frame_idx],
-        );
+        update_shader_data_descriptor(&logical_device, &vk_alloc, shader_data_set, &shader_data);
 
         let command_buffer = command_buffers[frame_idx];
         let command_buffer_begin_info = vk::CommandBufferBeginInfo {
@@ -588,6 +582,10 @@ fn main() {
                 .expect("Could not acquire next image from swapchain");
         }
 
+        let now = std::time::Instant::now();
+        // println!("Frametime: {:?}", now - last_time);
+        last_time = now;
+
         if update_swapchain {
             println!("UPDATING SWAPCHAIN");
             update_swapchain = false;
@@ -620,15 +618,17 @@ fn main() {
                 )
                 .expect("Could not create swapchain");
 
-                for semaphore in render_semaphores {
-                    logical_device.destroy_semaphore(semaphore, None);
-                }
+                // for semaphore in render_semaphores {
+                //     logical_device.destroy_semaphore(semaphore, None);
+                // }
 
-                render_semaphores = Vec::from_fn(image_count, |_| {
-                    logical_device
-                        .create_semaphore(&semaphore_create_info, None)
-                        .expect("Could not create semaphore")
-                });
+                render_semaphores.resize(swapchain_images.len(), vk::Semaphore::null());
+
+                // for mut semaphore in &mut render_semaphores {
+                //     *semaphore =
+                //         unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }
+                //             .expect("Could not create semaphore");
+                // }
 
                 swapchain_loader.destroy_swapchain(swapchain_create_info.old_swapchain, None);
             }
@@ -658,6 +658,15 @@ fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<
     let layers = [c"VK_LAYER_KHRONOS_validation"];
     let layers_raw: Vec<*const c_char> = layers.iter().map(|raw_name| raw_name.as_ptr()).collect();
 
+    let enabled_validation_features = &[vk::ValidationFeatureEnableEXT::DEBUG_PRINTF];
+
+    let validation_features = vk::ValidationFeaturesEXT {
+        s_type: StructureType::VALIDATION_FEATURES_EXT,
+        enabled_validation_feature_count: 1,
+        p_enabled_validation_features: enabled_validation_features.as_ptr(),
+        ..Default::default()
+    };
+
     let instance_info = vk::InstanceCreateInfo {
         s_type: StructureType::INSTANCE_CREATE_INFO,
         p_application_info: &app_info,
@@ -665,6 +674,7 @@ fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<
         pp_enabled_extension_names: extensions.as_ptr(),
         enabled_layer_count: layers_raw.len() as u32,
         pp_enabled_layer_names: layers_raw.as_ptr(),
+        p_next: &validation_features as *const _ as *const c_void,
         ..Default::default()
     };
 
@@ -1411,11 +1421,37 @@ fn setup_descriptors(
 
 fn update_shader_data_descriptor(
     logical_device: &Device,
+    vk_alloc: &vk_mem::Allocator,
     shader_data_set: vk::DescriptorSet,
-    shader_data_buffer: &ShaderDataBuffer,
+    shader_data: &ShaderData,
 ) {
+    let buffer_info = vk::BufferCreateInfo {
+        s_type: StructureType::BUFFER_CREATE_INFO,
+        size: size_of::<ShaderData>() as u64,
+        usage: vk::BufferUsageFlags::UNIFORM_BUFFER,
+        ..Default::default()
+    };
+
+    let alloc_info = vk_mem::AllocationCreateInfo {
+        usage: vk_mem::MemoryUsage::Auto,
+        flags: vk_mem::AllocationCreateFlags::HOST_ACCESS_SEQUENTIAL_WRITE
+            | vk_mem::AllocationCreateFlags::HOST_ACCESS_ALLOW_TRANSFER_INSTEAD
+            | vk_mem::AllocationCreateFlags::MAPPED,
+        ..Default::default()
+    };
+
+    let (buffer, alloc) = unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info).unwrap() };
+
+    unsafe {
+        copy_nonoverlapping(
+            &shader_data as *const _ as *const c_void,
+            vk_alloc.get_allocation_info(&alloc).mapped_data,
+            1,
+        );
+    }
+
     let shader_buffer_info = vk::DescriptorBufferInfo {
-        buffer: shader_data_buffer.buffer,
+        buffer,
         offset: 0,
         range: size_of::<ShaderData>() as u64,
     };
