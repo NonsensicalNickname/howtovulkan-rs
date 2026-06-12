@@ -201,10 +201,10 @@ fn main() {
     let v_buf_size = size_of::<Vertex>() * model_vertices.len();
     let i_buf_size = size_of::<u16>() * model_indices.len();
 
-    let (buffer, buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
+    let (buffer, mut buffer_alloc) = get_buffer(&vk_alloc, (v_buf_size + i_buf_size) as u64)
         .expect("Error creating the buffer:");
 
-    let buffer_mapped_ptr = vk_alloc.get_allocation_info(&buffer_alloc).mapped_data;
+    let buffer_mapped_ptr = unsafe { vk_alloc.map_memory(&mut buffer_alloc).expect("fuck") };
 
     println!("Copying mesh into VRAM...");
 
@@ -212,18 +212,24 @@ fn main() {
     let indices_ptr = model_indices.as_ptr() as *const c_void;
 
     unsafe {
-        copy_nonoverlapping(vertices_ptr, buffer_mapped_ptr, model_vertices.len());
-        copy_nonoverlapping(
-            indices_ptr,
-            buffer_mapped_ptr.add(model_vertices.len()),
-            model_indices.len(),
+        buffer_mapped_ptr.copy_from(
+            model_vertices.as_ptr() as *const u8,
+            size_of_val(&model_vertices[0]) * model_vertices.len(),
         );
+
+        buffer_mapped_ptr.add(v_buf_size).copy_from(
+            model_indices.as_ptr() as *const u8,
+            size_of_val(&model_indices[0]) * model_indices.len(),
+        );
+
         // perchance ?
         // vk_alloc.unmap_memory(&mut buffer_alloc);
     };
 
     drop(model_vertices);
     drop(model_indices);
+
+    unsafe { vk_alloc.unmap_memory(&mut buffer_alloc) }
 
     let mut shader_data_buffer = init_shader_buffer(&vk_alloc, &logical_device);
 
@@ -309,12 +315,7 @@ fn main() {
             32.0,
         );
 
-        let view = nalgebra_glm::translate(
-            &nalgebra_glm::mat4(
-                1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-            ),
-            &cam_pos,
-        );
+        let view = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &cam_pos);
 
         let model: [nalgebra_glm::Mat4; 3] = array::from_fn(|idx| {
             let instance_pos = nalgebra_glm::vec3((idx as f32 - 1.0) * 3.0, 0.0, 0.0);
@@ -326,12 +327,7 @@ fn main() {
                 0.0,
             ));
 
-            nalgebra_glm::translate(
-                &nalgebra_glm::mat4(
-                    1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0, 1.0,
-                ),
-                &instance_pos,
-            ) * quat
+            nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &instance_pos) * quat
         });
 
         let shader_data = ShaderData {
@@ -564,8 +560,6 @@ fn main() {
                 .expect("Could not submit queue");
         }
 
-        frame_idx = (frame_idx + 1) % MAX_FRAMES_IN_FLIGHT;
-
         let present_info = vk::PresentInfoKHR {
             s_type: StructureType::PRESENT_INFO_KHR,
             wait_semaphore_count: 1,
@@ -633,6 +627,8 @@ fn main() {
                 swapchain_loader.destroy_swapchain(swapchain_create_info.old_swapchain, None);
             }
         }
+
+        frame_idx = (frame_idx + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     // good idea: send window event after doing as much as possible per loop iter
@@ -1554,7 +1550,7 @@ fn setup_pipeline(
     };
 
     let blend_attachment = vk::PipelineColorBlendAttachmentState {
-        color_write_mask: vk::ColorComponentFlags::from_raw(0xF),
+        color_write_mask: vk::ColorComponentFlags::RGBA,
         ..Default::default()
     };
 

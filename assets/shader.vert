@@ -23,16 +23,19 @@ layout (location = 9) out uint outInstanceIndex;
 
 
 void main() {
-    // debugPrintfEXT("Shader Data from shader %u\n", shaderData.selected);
-
     mat4 modelMat = shaderData.model[gl_VertexIndex];
     outNormal = mat3(shaderData.view * modelMat) * Normal;
     outUV = UV;
     outPos = shaderData.projection * shaderData.view * modelMat * vec4(Pos.xyz, 1.0);
+
     outFactor = vec3(shaderData.selected == gl_VertexIndex ? 3.0f : 1.0f);
+
     outInstanceIndex = gl_VertexIndex;
 
     vec4 fragPos = shaderData.view * modelMat * vec4(Pos.xyz, 1.0);
     outLightVec = shaderData.lightPos.xyz - fragPos.xyz;
     outViewVec = -fragPos.xyz;
+
+    outPos = vec4(Pos, 1.0);         
+    gl_Position = outPos;
 }

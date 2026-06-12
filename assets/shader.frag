@@ -26,8 +26,7 @@ void main() {
     vec3 specular = vec3(pow(max(dot(R, V), 0.0), 16.0) * 0.75);
 
     vec3 color = texture(textures[nonuniformEXT(InstanceIndex)], UV).rgb * Factor;
-    
-    debugPrintfEXT("Fragment color: %f, %f, %f", color.r, color.g, color.b);
+
     //Colour = vec4(diffuse * color.rgb + specular, 1.0);
-    Colour = vec4(1.0,1.0,1.0, 1.0);
+    Colour = vec4(0.5,1.0,1.0, 1.0);
 }

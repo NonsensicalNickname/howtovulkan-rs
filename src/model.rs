@@ -1,5 +1,6 @@
 use tobj::{LoadError, LoadOptions, LoadResult};
 
+#[repr(C)]
 pub struct Vertex {
     pub pos: glm::Vec3,
     pub normal: glm::Vec3,
