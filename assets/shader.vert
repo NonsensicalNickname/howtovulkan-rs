@@ -29,9 +29,9 @@ void main() {
     
     gl_Position = shaderData.projection * shaderData.view * modelMat * vec4(Pos.xyz, 1.0);
 
-    outFactor = vec3(shaderData.selected == gl_VertexIndex ? 3.0f : 1.0f);
+    outFactor = vec3(shaderData.selected == gl_InstanceIndex ? 3.0f : 1.0f);
 
-    outInstanceIndex = gl_VertexIndex;
+    outInstanceIndex = gl_InstanceIndex;
 
     vec4 fragPos = shaderData.view * modelMat * vec4(Pos.xyz, 1.0);
     outLightVec = shaderData.lightPos.xyz - fragPos.xyz;
