@@ -308,35 +308,7 @@ fn main() {
             (image_idx, update_swapchain) = (res.0 as usize, res.1);
         }
 
-        let proj = nalgebra_glm::perspective(
-            nalgebra_glm::radians(&nalgebra_glm::vec1(45.0)).x,
-            win_size.0 as f32 / win_size.1 as f32,
-            0.1,
-            32.0,
-        );
-
-        let view = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &cam_pos);
-
-        let model: [nalgebra_glm::Mat4; 3] = array::from_fn(|idx| {
-            let instance_pos = nalgebra_glm::vec3((idx as f32 - 1.0) * 3.0, 0.0, 0.0);
-
-            let quat = nalgebra_glm::quat_to_mat4(&nalgebra_glm::quat(
-                obj_rotations[idx].x,
-                obj_rotations[idx].y,
-                obj_rotations[idx].z,
-                0.0,
-            ));
-
-            nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &instance_pos) * quat
-        });
-
-        let shader_data = ShaderData {
-            proj,
-            view,
-            model,
-            light_pos: nalgebra_glm::vec4(0.0, -10.0, 10.0, 0.0),
-            selected: 1,
-        };
+        let shader_data = calculate_shader_data(win_size, &cam_pos, &obj_rotations);
 
         update_shader_data_descriptor(
             &logical_device,
@@ -420,7 +392,7 @@ fn main() {
             store_op: vk::AttachmentStoreOp::STORE,
             clear_value: vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.2, 1.0],
+                    float32: [0.0, 0.0, 0.0, 1.0],
                 },
             },
             ..Default::default()
@@ -1598,6 +1570,43 @@ fn setup_pipeline(
         },
         pipeline_layout,
     ))
+}
+
+fn calculate_shader_data(
+    win_size: (u32, u32),
+    cam_pos: &nalgebra_glm::Vec3,
+    obj_rotations: &[nalgebra_glm::Vec3; 3],
+) -> ShaderData {
+    let proj = nalgebra_glm::perspective(
+        win_size.0 as f32 / win_size.1 as f32,
+        nalgebra_glm::radians(&nalgebra_glm::vec1(45.0)).x,
+        0.1,
+        32.0,
+    );
+
+    let view = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), cam_pos);
+
+    let model: [nalgebra_glm::Mat4; 3] = array::from_fn(|idx| {
+        let instance_pos = nalgebra_glm::vec3((idx as f32 - 1.0) * 3.0, 0.0, 0.0);
+
+        // TODO: Figure out why this is balls
+        let quat = nalgebra_glm::quat_to_mat4(&nalgebra_glm::Quat::from_vector(
+            nalgebra_glm::vec3_to_vec4(&obj_rotations[idx]),
+        ));
+
+        nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &instance_pos) //* quat
+    });
+
+    let sd = ShaderData {
+        proj,
+        view,
+        model,
+        light_pos: nalgebra_glm::vec4(0.0, -10.0, 10.0, 0.0),
+        selected: 1,
+    };
+
+    //println!("{sd:?}\n\n");
+    sd
 }
 
 // TODO: alongside a flag for this, add option to manually set device
