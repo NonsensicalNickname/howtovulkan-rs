@@ -31,7 +31,7 @@
                 udev
 
                 stdenv.cc.cc.lib
-                # raylib
+                
                 # glfw
                 # cmake
                 # clang
@@ -44,6 +44,9 @@
                 # xorg.libXi
             ];
 
+
+            APP_IMAGE_TOOL = builtins.toString ./.;
+
             LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
             SHADERC_LIB_DIR = "${pkgs.lib.makeLibraryPath [pkgs.shaderc]}";
             VULKAN_SDK = "${pkgs.vulkan-validation-layers}/share/vulkan/implicit_layer.d";
@@ -53,6 +56,11 @@
 			VK_LAYER_PRINTF_TO_STDOUT = 1;
 			VK_VALIDATION_FEATURES = "+DEBUG_PRINTF";
             VK_LAYER_PRINTF_BUFFER_SIZE = 65536;
+
+            shellHook = ''
+                cargo install cargo-appimage
+                export PATH=$PATH:${APP_IMAGE_TOOL}
+            '';
 
             # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
         };
