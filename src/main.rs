@@ -13,18 +13,22 @@ use winit::{
     application::ApplicationHandler,
     dpi::LogicalSize,
     event_loop::{ControlFlow, EventLoop},
+    platform::pump_events::{self, EventLoopExtPumpEvents},
     raw_window_handle::{HasRawDisplayHandle, HasRawWindowHandle, RawDisplayHandle},
     window::WindowAttributes,
 };
 
 use std::{
     array,
+    cell::RefCell,
     ffi::{CString, c_char, c_void},
     mem::offset_of,
     num::NonZeroU32,
     ops::Mul,
     ptr::copy_nonoverlapping,
+    rc::Rc,
     sync::Arc,
+    time::Duration,
 };
 
 use ash::{
@@ -67,11 +71,18 @@ struct Texture {
     sampler: vk::Sampler,
 }
 
+struct AppState<'a> {
+    cam_pos: &'a mut nalgebra_glm::Vec3,
+    obj_rotations: &'a mut [nalgebra_glm::Vec3; 3],
+    selected: u32,
+    last_time: std::time::Instant,
+}
+
 #[allow(unused)]
 fn main() {
     let entry = unsafe { Entry::load().expect("Wuh oh, no vulkan sdk and such") };
 
-    let evl = EventLoop::new().unwrap();
+    let mut evl = EventLoop::new().unwrap();
     evl.set_control_flow(ControlFlow::Poll);
 
     let mut raw_display_handle = evl.raw_display_handle().unwrap();
@@ -244,11 +255,22 @@ fn main() {
     let (mut command_pool, mut command_buffers) = create_command_buffers(&logical_device, qf_idx)
         .expect("Could not create command pool or buffers");
 
-    let mut app = AppWindow {
-        window: window.clone(),
-        surface: Arc::new(surface),
-        surface_loader: Arc::new(surface_loader.clone()),
-    };
+    let mut cam_pos = nalgebra_glm::vec3(0.0, 0.0, -6.0);
+    let mut obj_rotations = [nalgebra_glm::vec3(0.0, 0.0, 0.0); 3];
+
+    let mut state = Rc::new(RefCell::new(AppState {
+        cam_pos: &mut cam_pos,
+        obj_rotations: &mut obj_rotations,
+        selected: 1,
+        last_time: std::time::Instant::now(),
+    }));
+
+    let mut app = AppWindow::new(
+        window.clone(),
+        Arc::new(surface),
+        Arc::new(surface_loader.clone()),
+        Rc::clone(&state),
+    );
 
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
@@ -275,15 +297,11 @@ fn main() {
     )
     .expect("Could not set up the graphics pipeline");
 
-    let mut last_time = std::time::Instant::now();
     let mut quit = false;
     let mut update_swapchain = false;
 
     let mut image_idx: usize = 0;
     let mut frame_idx: usize = 0;
-
-    let mut cam_pos = nalgebra_glm::vec3(0.0, 0.0, -6.0);
-    let mut obj_rotations = [nalgebra_glm::vec3(0.0, 0.0, 0.0); 3];
 
     println!("Starting render loop");
 
@@ -308,7 +326,7 @@ fn main() {
             (image_idx, update_swapchain) = (res.0 as usize, res.1);
         }
 
-        let shader_data = calculate_shader_data(win_size, &cam_pos, &obj_rotations);
+        let shader_data = calculate_shader_data(win_size, &state.borrow());
 
         update_shader_data_descriptor(
             &logical_device,
@@ -548,9 +566,18 @@ fn main() {
                 .expect("Could not acquire next image from swapchain");
         }
 
+        frame_idx = (frame_idx + 1) % MAX_FRAMES_IN_FLIGHT;
+
         let now = std::time::Instant::now();
-        // println!("Frametime: {:?}", now - last_time);
-        last_time = now;
+        //println!("Frametime: {:?}", (now - state.borrow().last_time).as_millis() as f32);
+        state.borrow_mut().last_time = now;
+
+        if let pump_events::PumpStatus::Exit(..) =
+            evl.pump_app_events(Some(Duration::from_millis(16)), &mut app)
+        {
+            println!("Exiting...");
+            break;
+        }
 
         if update_swapchain {
             println!("UPDATING SWAPCHAIN");
@@ -599,12 +626,10 @@ fn main() {
                 swapchain_loader.destroy_swapchain(swapchain_create_info.old_swapchain, None);
             }
         }
-
-        frame_idx = (frame_idx + 1) % MAX_FRAMES_IN_FLIGHT;
     }
 
     // good idea: send window event after doing as much as possible per loop iter
-    evl.run_app(&mut app).unwrap();
+    //evl.run_app(&mut app).unwrap();
 }
 
 fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<Instance> {
@@ -1055,18 +1080,19 @@ fn load_tex(
             ..Default::default()
         };
 
-        let (img_src_buf, img_src_buf_alloc) = unsafe {
+        let (img_src_buf, mut img_src_buf_alloc) = unsafe {
             vk_alloc.create_buffer(&img_src_buf_create_info, &img_src_alloc_create_info)?
         };
 
-        let img_src_buf_ptr = vk_alloc.get_allocation_info(&img_src_buf_alloc).mapped_data;
-        let tex_data_ptr = tex_data.as_ptr() as *const c_void;
+        let p_texture_data = unsafe { vk_alloc.map_memory(&mut img_src_buf_alloc)? };
 
         unsafe {
-            copy_nonoverlapping(tex_data_ptr, img_src_buf_ptr, tex_data_size);
+            p_texture_data.copy_from(tex_data.as_ptr(), tex_data_size);
         }
 
         drop(tex_data);
+
+        unsafe { vk_alloc.unmap_memory(&mut img_src_buf_alloc) }
 
         let fence_create_info = vk::FenceCreateInfo {
             s_type: StructureType::FENCE_CREATE_INFO,
@@ -1572,11 +1598,7 @@ fn setup_pipeline(
     ))
 }
 
-fn calculate_shader_data(
-    win_size: (u32, u32),
-    cam_pos: &nalgebra_glm::Vec3,
-    obj_rotations: &[nalgebra_glm::Vec3; 3],
-) -> ShaderData {
+fn calculate_shader_data(win_size: (u32, u32), state: &AppState) -> ShaderData {
     let proj = nalgebra_glm::perspective(
         win_size.0 as f32 / win_size.1 as f32,
         nalgebra_glm::radians(&nalgebra_glm::vec1(45.0)).x,
@@ -1584,17 +1606,15 @@ fn calculate_shader_data(
         32.0,
     );
 
-    let view = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), cam_pos);
+    let view = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), state.cam_pos);
 
     let model: [nalgebra_glm::Mat4; 3] = array::from_fn(|idx| {
         let instance_pos = nalgebra_glm::vec3((idx as f32 - 1.0) * 3.0, 0.0, 0.0);
 
-        // TODO: Figure out why this is balls
-        let quat = nalgebra_glm::quat_to_mat4(&nalgebra_glm::Quat::from_vector(
-            nalgebra_glm::vec3_to_vec4(&obj_rotations[idx]),
-        ));
-
-        nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &instance_pos) //* quat
+        let before_rot = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &instance_pos);
+        let rot_x = nalgebra_glm::rotate_x(&before_rot, state.obj_rotations[idx].x);
+        let rot_y = nalgebra_glm::rotate_y(&rot_x, state.obj_rotations[idx].y);
+        nalgebra_glm::rotate_z(&rot_y, state.obj_rotations[idx].z)
     });
 
     let sd = ShaderData {
@@ -1602,10 +1622,9 @@ fn calculate_shader_data(
         view,
         model,
         light_pos: nalgebra_glm::vec4(0.0, -10.0, 10.0, 0.0),
-        selected: 1,
+        selected: state.selected,
     };
 
-    //println!("{sd:?}\n\n");
     sd
 }
 
