@@ -85,6 +85,12 @@ impl ApplicationHandler for AppWindow<'_> {
                         *selected += 1;
                     }
                 }
+                (PhysicalKey::Code(KeyCode::Minus), event::ElementState::Pressed) => {
+                    self.state.borrow_mut().cam_pos.z -= 0.1;
+                }
+                (PhysicalKey::Code(KeyCode::Equal), event::ElementState::Pressed) => {
+                    self.state.borrow_mut().cam_pos.z += 0.1;
+                }
                 _ => (),
             },
             MouseWheel {
