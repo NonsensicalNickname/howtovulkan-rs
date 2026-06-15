@@ -6,8 +6,6 @@ use winit::{
     application::ApplicationHandler,
     event::{
         self,
-        DeviceEvent::MouseMotion,
-        KeyEvent,
         WindowEvent::{self, *},
     },
     event_loop::ActiveEventLoop,
@@ -99,7 +97,8 @@ impl ApplicationHandler for AppWindow<'_> {
                 phase,
             } => {
                 if let event::MouseScrollDelta::LineDelta(_, y) = delta {
-                    self.state.borrow_mut().cam_pos.z += y;
+                    let factor = self.state.borrow().frame_time * 10.0;
+                    self.state.borrow_mut().cam_pos.z += y * factor;
                 }
             }
             MouseInput {
@@ -128,12 +127,10 @@ impl ApplicationHandler for AppWindow<'_> {
         if self.mouse_down
             && let event::DeviceEvent::MouseMotion { delta } = event
         {
-            // TODO: why
-            let factor = (std::time::Instant::now() - self.state.borrow().last_time).as_millis(); //as f64 / 1000.0;
-            //println!("{:?}", factor);
+            let factor = self.state.borrow().frame_time;
             self.rotate(nalgebra_glm::vec3(
-                -delta.1 as f32 * 0.006,
-                delta.0 as f32 * 0.006,
+                -delta.1 as f32 * factor,
+                delta.0 as f32 * factor,
                 0.0,
             ));
         }

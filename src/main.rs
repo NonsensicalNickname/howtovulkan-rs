@@ -10,7 +10,6 @@ use model::Vertex;
 use window::AppWindow;
 
 use winit::{
-    application::ApplicationHandler,
     dpi::LogicalSize,
     event_loop::{ControlFlow, EventLoop},
     platform::pump_events::{self, EventLoopExtPumpEvents},
@@ -24,8 +23,6 @@ use std::{
     ffi::{CString, c_char, c_void},
     mem::offset_of,
     num::NonZeroU32,
-    ops::Mul,
-    ptr::copy_nonoverlapping,
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -34,7 +31,7 @@ use std::{
 use ash::{
     Device, Entry, Instance, khr,
     prelude::VkResult,
-    vk::{self, DescriptorSetLayoutBinding, DescriptorSetLayoutCreateFlags, StructureType},
+    vk::{self, StructureType},
 };
 
 use vk_mem::Alloc;
@@ -44,7 +41,6 @@ use ktx::{Ktx, KtxInfo, include_ktx};
 
 // check with show_physical_device_names
 const PHYSICAL_DEVICE_IDX: usize = 0;
-const MAKE_PRE_VK_SURFACE: bool = false;
 const DISPLAY_SCALING: f64 = 1.0;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
 
@@ -75,7 +71,7 @@ struct AppState<'a> {
     cam_pos: &'a mut nalgebra_glm::Vec3,
     obj_rotations: &'a mut [nalgebra_glm::Vec3; 3],
     selected: u32,
-    last_time: std::time::Instant,
+    frame_time: f32,
 }
 
 #[allow(unused)]
@@ -120,23 +116,6 @@ fn main() {
         )
         .unwrap(),
     );
-
-    // may or may not need to make and draw to a surface before the vulkan surface...
-    if MAKE_PRE_VK_SURFACE {
-        let sbuf_ctx = softbuffer::Context::new(evl.owned_display_handle()).unwrap();
-        let mut sbuf_surface = softbuffer::Surface::new(&sbuf_ctx, window.clone()).unwrap();
-        let win_size = window.inner_size();
-        sbuf_surface
-            .resize(
-                NonZeroU32::new(win_size.width).unwrap(),
-                NonZeroU32::new(win_size.height).unwrap(),
-            )
-            .unwrap();
-        let mut buffer = sbuf_surface.buffer_mut().unwrap();
-        buffer.fill_with(|| 255 | 255 << 8 | 255 << 16);
-
-        buffer.present().unwrap();
-    }
 
     println!("Creating surface...");
     let surface = unsafe {
@@ -262,7 +241,7 @@ fn main() {
         cam_pos: &mut cam_pos,
         obj_rotations: &mut obj_rotations,
         selected: 1,
-        last_time: std::time::Instant::now(),
+        frame_time: 16.0 / 1000.0,
     }));
 
     let mut app = AppWindow::new(
@@ -302,6 +281,7 @@ fn main() {
 
     let mut image_idx: usize = 0;
     let mut frame_idx: usize = 0;
+    let mut last_time = std::time::Instant::now();
 
     println!("Starting render loop");
 
@@ -569,8 +549,8 @@ fn main() {
         frame_idx = (frame_idx + 1) % MAX_FRAMES_IN_FLIGHT;
 
         let now = std::time::Instant::now();
-        //println!("Frametime: {:?}", (now - state.borrow().last_time).as_millis() as f32);
-        state.borrow_mut().last_time = now;
+        state.borrow_mut().frame_time = (now - last_time).as_millis() as f32 / 1000.0;
+        last_time = now;
 
         if let pump_events::PumpStatus::Exit(..) =
             evl.pump_app_events(Some(Duration::from_millis(16)), &mut app)
