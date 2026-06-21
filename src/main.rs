@@ -22,7 +22,6 @@ use std::{
     cell::RefCell,
     ffi::{CString, c_char, c_void},
     mem::offset_of,
-    num::NonZeroU32,
     rc::Rc,
     sync::Arc,
     time::Duration,
@@ -225,12 +224,14 @@ fn main() {
 
     let mut render_semaphores = Vec::<vk::Semaphore>::with_capacity(swapchain_images.len());
 
+    println!("Creating synchronisation objects...");
     let (fences, present_semaphores, tmp, semaphore_create_info) =
         init_sync_objects(&logical_device, swapchain_images.len(), render_semaphores)
             .expect("Could not create synchronisation objects");
 
     render_semaphores = tmp;
 
+    println!("Creating command buffers...");
     let (mut command_pool, mut command_buffers) = create_command_buffers(&logical_device, qf_idx)
         .expect("Could not create command pool or buffers");
 
@@ -251,9 +252,11 @@ fn main() {
         Rc::clone(&state),
     );
 
+    println!("Loading textures...");
     let (textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
+    println!("Initialising descriptors...");
     let (shader_data_set, shader_data_set_layout, texture_set, texture_set_layout) =
         setup_descriptors(
             &logical_device,
@@ -261,11 +264,13 @@ fn main() {
             &texture_descriptors,
             &shader_data_buffer,
         )
-        .expect("Could not set up descriptors");
+        .expect("Could not initialise descriptors");
 
+    println!("Loading shaders...");
     let (vert_shader_module, frag_shader_module) =
         shader::load_shader_module(&logical_device).expect("Could not load shaders");
 
+    println!("Creating graphics pipeline...");
     let (pipeline, pipeline_layout) = setup_pipeline(
         &logical_device,
         vert_shader_module,
@@ -283,7 +288,7 @@ fn main() {
     let mut frame_idx: usize = 0;
     let mut last_time = std::time::Instant::now();
 
-    println!("Starting render loop");
+    println!("Starting render loop...");
 
     while !quit {
         unsafe {
