@@ -11,7 +11,7 @@ mkdir -p AppDir/usr/share/applications
 mkdir -p AppDir/usr/share/icons/hicolor/256x256/apps
 mkdir -p AppDir/usr/share/metainfo
 
-cargo build
+cargo build --features no-layers
 cp target/debug/howtovulkan-rs AppDir/usr/bin/
 
 ldd build/howtovulkan-rs | grep "=> /" | awk '{print $3}' | xargs -I{} cp -v {} AppDir/usr/lib/

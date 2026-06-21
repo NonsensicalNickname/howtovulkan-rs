@@ -20,7 +20,7 @@ use winit::{
 use std::{
     array,
     cell::RefCell,
-    ffi::{CString, c_char, c_void},
+    ffi::{CString, c_char, c_void, CStr},
     mem::offset_of,
     rc::Rc,
     sync::Arc,
@@ -645,7 +645,7 @@ fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<
         ..Default::default()
     };
 
-    let instance_info = vk::InstanceCreateInfo {
+    let mut instance_info = vk::InstanceCreateInfo {
         s_type: StructureType::INSTANCE_CREATE_INFO,
         p_application_info: &app_info,
         enabled_extension_count: extensions.len() as u32,
@@ -655,6 +655,13 @@ fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<
         p_next: &validation_features as *const _ as *const c_void,
         ..Default::default()
     };
+
+    #[cfg(feature = "no-layers")]
+    {
+        instance_info.enabled_layer_count = 0;
+        instance_info.pp_enabled_layer_names = [].as_ptr();
+        instance_info.p_next = core::ptr::null();
+    }
 
     unsafe { entry.create_instance(&instance_info, None) }
 }

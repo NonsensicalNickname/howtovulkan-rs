@@ -13,3 +13,6 @@ nalgebra-glm = "0.21.0"
 tobj = "4.0.3"
 vk-mem = "0.5.0"
 winit = "0.30.12"
+
+[features]
+no-layers = []
