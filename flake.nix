@@ -1,5 +1,5 @@
 {
-  description = "A very basic flake";
+  description = "Development flake for howtovulkan-rs";
 
   inputs = {
     nixpkgs.url = "github:nixos/nixpkgs?ref=nixos-unstable";
@@ -8,7 +8,6 @@
   outputs = { self, nixpkgs }: let 
         pkgs = nixpkgs.legacyPackages."x86_64-linux";
     in {
-        # dependencies per raylib-rs
         devShells."x86_64-linux".default = pkgs.mkShellNoCC rec {
             buildInputs = with pkgs; [
                 ktx-tools
@@ -31,38 +30,19 @@
                 udev
 
                 stdenv.cc.cc.lib
-                
-                # glfw
-                # cmake
-                # clang
-                # wayland
-
-                # libGL
-                # xorg.libXrandr
-                # xorg.libXinerama
-                # xorg.libXcursor
-                # xorg.libXi
             ];
 
-
-            APP_IMAGE_TOOL = builtins.toString ./.;
-
             LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
+            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
+            
             SHADERC_LIB_DIR = "${pkgs.lib.makeLibraryPath [pkgs.shaderc]}";
+
             VULKAN_SDK = "${pkgs.vulkan-validation-layers}/share/vulkan/implicit_layer.d";
             VK_LAYER_PATH = "${pkgs.vulkan-validation-layers}/share/vulkan/explicit_layer.d";
-            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
             VK_LOADER_DEBUG= "all vulkaninfo";
 			VK_LAYER_PRINTF_TO_STDOUT = 1;
 			VK_VALIDATION_FEATURES = "+DEBUG_PRINTF";
             VK_LAYER_PRINTF_BUFFER_SIZE = 65536;
-
-            shellHook = ''
-                cargo install cargo-appimage
-                export PATH=$PATH:${APP_IMAGE_TOOL}
-            '';
-
-            # env.RUST_SRC_PATH = "${pkgs.rust.packages.stable.rustPlatform.rustLibSrc}";
         };
   };
 }
