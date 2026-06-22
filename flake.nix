@@ -11,11 +11,9 @@
         devShells."x86_64-linux".default = pkgs.mkShellNoCC rec {
             buildInputs = with pkgs; [
                 ktx-tools
-                renderdoc
 
                 libxkbcommon
                 wayland
-                pkg-config
 
                 vulkan-headers
                 vulkan-loader
@@ -24,16 +22,12 @@
                 vulkan-validation-layers
                 vulkan-tools-lunarg
                 vulkan-memory-allocator
-                mesa-demos
-                shader-slang
                 shaderc
-                udev
 
                 stdenv.cc.cc.lib
             ];
 
             LD_LIBRARY_PATH = "${pkgs.lib.makeLibraryPath buildInputs}";
-            LIBCLANG_PATH = "${pkgs.libclang.lib}/lib";
             
             SHADERC_LIB_DIR = "${pkgs.lib.makeLibraryPath [pkgs.shaderc]}";
 

@@ -20,7 +20,7 @@ use winit::{
 use std::{
     array,
     cell::RefCell,
-    ffi::{CString, c_char, c_void, CStr},
+    ffi::{CStr, CString, c_char, c_void},
     mem::offset_of,
     rc::Rc,
     sync::Arc,
@@ -71,6 +71,7 @@ struct AppState<'a> {
     obj_rotations: &'a mut [nalgebra_glm::Vec3; 3],
     selected: u32,
     frame_time: f32,
+    update_swapchain: bool,
 }
 
 #[allow(unused)]
@@ -137,7 +138,7 @@ fn main() {
     };
 
     // TODO: Add case for non-wayland surfaces
-    let win_size = {
+    let mut win_size = {
         let ls = window.inner_size().to_logical::<u32>(DISPLAY_SCALING);
         (ls.width, ls.height)
     };
@@ -174,7 +175,13 @@ fn main() {
 
     let mut image_count = swapchain_images.len();
 
-    let (depth_image, mut depth_image_alloc, depth_image_view, depth_format) = get_depth_image(
+    let (
+        mut depth_image,
+        mut depth_image_info,
+        mut depth_image_alloc,
+        mut depth_image_view,
+        depth_format,
+    ) = get_depth_image(
         &instance,
         &logical_device,
         physical_device,
@@ -243,6 +250,7 @@ fn main() {
         obj_rotations: &mut obj_rotations,
         selected: 1,
         frame_time: 16.0 / 1000.0,
+        update_swapchain: false,
     }));
 
     let mut app = AppWindow::new(
@@ -281,7 +289,6 @@ fn main() {
     )
     .expect("Could not set up the graphics pipeline");
 
-    let mut quit = false;
     let mut update_swapchain = false;
 
     let mut image_idx: usize = 0;
@@ -290,7 +297,7 @@ fn main() {
 
     println!("Starting render loop...");
 
-    while !quit {
+    loop {
         unsafe {
             // Wait for GPU
             logical_device
@@ -557,6 +564,8 @@ fn main() {
         state.borrow_mut().frame_time = (now - last_time).as_millis() as f32 / 1000.0;
         last_time = now;
 
+        state.borrow_mut().update_swapchain = update_swapchain;
+
         if let pump_events::PumpStatus::Exit(..) =
             evl.pump_app_events(Some(Duration::from_millis(16)), &mut app)
         {
@@ -564,9 +573,8 @@ fn main() {
             break;
         }
 
-        if update_swapchain {
-            println!("UPDATING SWAPCHAIN");
-            update_swapchain = false;
+        if state.borrow().update_swapchain {
+            state.borrow_mut().update_swapchain = false;
 
             let surface_caps = unsafe {
                 logical_device.device_wait_idle().expect("Could not idle");
@@ -575,18 +583,21 @@ fn main() {
                     .expect("Could not get surface caps")
             };
 
-            swapchain_create_info.old_swapchain = swapchain;
+            win_size = {
+                let ls = window.inner_size().to_logical::<u32>(DISPLAY_SCALING);
+                (ls.width, ls.height)
+            };
+
+            swapchain_create_info.old_swapchain = swapchain.clone();
             swapchain_create_info.image_extent = vk::Extent2D {
                 width: win_size.0,
                 height: win_size.1,
             };
 
             unsafe {
-                for image_view in swapchain_image_views {
-                    logical_device.destroy_image_view(image_view, None);
+                for image_view in &mut swapchain_image_views {
+                    logical_device.destroy_image_view(*image_view, None);
                 }
-
-                image_count = swapchain_images.len();
 
                 (swapchain, swapchain_images, swapchain_image_views) = create_swapchain(
                     &logical_device,
@@ -596,25 +607,63 @@ fn main() {
                 )
                 .expect("Could not create swapchain");
 
-                // for semaphore in render_semaphores {
-                //     logical_device.destroy_semaphore(semaphore, None);
-                // }
+                for semaphore in &mut render_semaphores {
+                    logical_device.destroy_semaphore(*semaphore, None);
+                }
 
                 render_semaphores.resize(swapchain_images.len(), vk::Semaphore::null());
 
-                // for mut semaphore in &mut render_semaphores {
-                //     *semaphore =
-                //         unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }
-                //             .expect("Could not create semaphore");
-                // }
+                let semaphore_create_info = vk::SemaphoreCreateInfo {
+                    s_type: StructureType::SEMAPHORE_CREATE_INFO,
+                    ..Default::default()
+                };
 
+                for mut semaphore in &mut render_semaphores {
+                    *semaphore =
+                        unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }
+                            .expect("Could not create semaphore");
+                }
+
+                logical_device.destroy_image(depth_image, None);
+                logical_device.destroy_image_view(depth_image_view, None);
                 swapchain_loader.destroy_swapchain(swapchain_create_info.old_swapchain, None);
-            }
+
+                depth_image_info.extent = vk::Extent3D {
+                    width: win_size.0,
+                    height: win_size.1,
+                    depth: 1,
+                };
+
+                let alloc_info = vk_mem::AllocationCreateInfo {
+                    usage: vk_mem::MemoryUsage::Auto,
+                    flags: vk_mem::AllocationCreateFlags::DEDICATED_MEMORY,
+                    ..Default::default()
+                };
+
+                (depth_image, depth_image_alloc) = vk_alloc
+                    .create_image(&depth_image_info, &alloc_info)
+                    .expect("Could not create allocation for depth image");
+
+                let view_info = vk::ImageViewCreateInfo {
+                    s_type: StructureType::IMAGE_VIEW_CREATE_INFO,
+                    image: depth_image,
+                    view_type: vk::ImageViewType::TYPE_2D,
+                    format: depth_format,
+                    subresource_range: vk::ImageSubresourceRange {
+                        aspect_mask: vk::ImageAspectFlags::DEPTH,
+                        level_count: 1_u32,
+                        layer_count: 1_u32,
+                        ..Default::default()
+                    },
+                    ..Default::default()
+                };
+
+                depth_image_view = logical_device
+                    .create_image_view(&view_info, None)
+                    .expect("Could not create depth image");
+            };
         }
     }
-
-    // good idea: send window event after doing as much as possible per loop iter
-    //evl.run_app(&mut app).unwrap();
 }
 
 fn create_instance(entry: &Entry, display_handle: RawDisplayHandle) -> VkResult<Instance> {
@@ -797,13 +846,19 @@ fn create_swapchain<'a>(
     }
 }
 
-fn get_depth_image(
-    instance: &Instance,
-    logical_device: &Device,
+fn get_depth_image<'a>(
+    instance: &'a Instance,
+    logical_device: &'a Device,
     physical_device: vk::PhysicalDevice,
     (width, height): (u32, u32),
-    vk_alloc: &vk_mem::Allocator,
-) -> VkResult<(vk::Image, vk_mem::Allocation, vk::ImageView, vk::Format)> {
+    vk_alloc: &'a vk_mem::Allocator,
+) -> VkResult<(
+    vk::Image,
+    vk::ImageCreateInfo<'a>,
+    vk_mem::Allocation,
+    vk::ImageView,
+    vk::Format,
+)> {
     let depth_formats = [
         vk::Format::D32_SFLOAT_S8_UINT,
         vk::Format::D24_UNORM_S8_UINT,
@@ -875,7 +930,13 @@ fn get_depth_image(
 
     let image_view = unsafe { logical_device.create_image_view(&view_info, None)? };
 
-    Ok((depth_image.0, depth_image.1, image_view, depth_format))
+    Ok((
+        depth_image.0,
+        depth_image_info,
+        depth_image.1,
+        image_view,
+        depth_format,
+    ))
 }
 
 fn get_buffer(
