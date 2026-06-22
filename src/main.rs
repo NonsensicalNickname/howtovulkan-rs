@@ -217,9 +217,6 @@ fn main() {
             model_indices.as_ptr() as *const u8,
             size_of_val(&model_indices[0]) * model_indices.len(),
         );
-
-        // perchance ?
-        // vk_alloc.unmap_memory(&mut buffer_alloc);
     };
 
     drop(model_vertices);
@@ -261,11 +258,11 @@ fn main() {
     );
 
     println!("Loading textures...");
-    let (textures, texture_descriptors) =
+    let (mut textures, texture_descriptors) =
         load_tex(&vk_alloc, &logical_device, command_pool, queue).expect("Could not load textures");
 
     println!("Initialising descriptors...");
-    let (shader_data_set, shader_data_set_layout, texture_set, texture_set_layout) =
+    let (shader_data_set, shader_data_set_layout, texture_set, texture_set_layout, descriptor_pool) =
         setup_descriptors(
             &logical_device,
             &textures,
@@ -625,6 +622,7 @@ fn main() {
                 }
 
                 logical_device.destroy_image(depth_image, None);
+                vk_alloc.free_memory(&mut depth_image_alloc);
                 logical_device.destroy_image_view(depth_image_view, None);
                 swapchain_loader.destroy_swapchain(swapchain_create_info.old_swapchain, None);
 
@@ -663,6 +661,57 @@ fn main() {
                     .expect("Could not create depth image");
             };
         }
+    }
+
+    // CLEANUP
+    unsafe {
+        logical_device.device_wait_idle().expect("Could not idle");
+
+        for idx in 0..MAX_FRAMES_IN_FLIGHT {
+            logical_device.destroy_fence(fences[idx], None);
+            logical_device.destroy_semaphore(present_semaphores[idx], None);
+        }
+
+        logical_device.destroy_buffer(shader_data_buffer.buffer, None);
+        vk_alloc.free_memory(&mut shader_data_buffer.alloc);
+
+        for semaphore in render_semaphores {
+            logical_device.destroy_semaphore(semaphore, None);
+        }
+
+        logical_device.destroy_image(depth_image, None);
+        vk_alloc.free_memory(&mut depth_image_alloc);
+        logical_device.destroy_image_view(depth_image_view, None);
+
+        for view in swapchain_image_views {
+            logical_device.destroy_image_view(view, None);
+        }
+
+        logical_device.destroy_buffer(buffer, None);
+        vk_alloc.free_memory(&mut buffer_alloc);
+
+        for mut texture in textures {
+            logical_device.destroy_image_view(texture.view, None);
+            logical_device.destroy_sampler(texture.sampler, None);
+            logical_device.destroy_image(texture.image, None);
+            vk_alloc.free_memory(&mut texture.alloc);
+        }
+
+        logical_device.destroy_descriptor_set_layout(shader_data_set_layout, None);
+        logical_device.destroy_descriptor_set_layout(texture_set_layout, None);
+        logical_device.destroy_descriptor_pool(descriptor_pool, None);
+
+        logical_device.destroy_pipeline_layout(pipeline_layout, None);
+        logical_device.destroy_pipeline(pipeline, None);
+        swapchain_loader.destroy_swapchain(swapchain, None);
+
+        surface_loader.destroy_surface(surface, None);
+        logical_device.destroy_command_pool(command_pool, None);
+        logical_device.destroy_shader_module(frag_shader_module, None);
+        logical_device.destroy_shader_module(vert_shader_module, None);
+
+        logical_device.destroy_device(None);
+        instance.destroy_instance(None);
     }
 }
 
@@ -780,6 +829,7 @@ fn get_logical_device(
         s_type: StructureType::PHYSICAL_DEVICE_VULKAN_1_2_FEATURES,
         descriptor_indexing: vk::TRUE,
         descriptor_binding_variable_descriptor_count: vk::TRUE,
+        descriptor_binding_uniform_buffer_update_after_bind: vk::TRUE,
         runtime_descriptor_array: vk::TRUE,
         buffer_device_address: vk::TRUE,
         shader_sampled_image_array_non_uniform_indexing: vk::TRUE,
@@ -1006,12 +1056,16 @@ fn init_sync_objects<'a>(
         ..Default::default()
     };
 
-    let fences: [vk::Fence; MAX_FRAMES_IN_FLIGHT] =
-        [unsafe { logical_device.create_fence(&fence_create_info, None)? }; MAX_FRAMES_IN_FLIGHT];
+    let mut fences = [vk::Fence::null(); MAX_FRAMES_IN_FLIGHT];
+    let mut present_semaphores = [vk::Semaphore::null(); MAX_FRAMES_IN_FLIGHT];
 
-    let present_semaphores: [vk::Semaphore; MAX_FRAMES_IN_FLIGHT] =
-        [unsafe { logical_device.create_semaphore(&semaphore_create_info, None)? };
-            MAX_FRAMES_IN_FLIGHT];
+    for idx in 0..MAX_FRAMES_IN_FLIGHT {
+        unsafe {
+            fences[idx] = logical_device.create_fence(&fence_create_info, None)?;
+            present_semaphores[idx] =
+                logical_device.create_semaphore(&semaphore_create_info, None)?;
+        };
+    }
 
     render_semaphores.resize(n_swapchain_images, vk::Semaphore::null());
 
@@ -1295,9 +1349,13 @@ fn load_tex(
             image_view: view,
             image_layout: vk::ImageLayout::READ_ONLY_OPTIMAL,
         });
-    }
 
-    // maybe this needs some explicit cleanup ?
+        unsafe {
+            logical_device.destroy_fence(fence, None);
+            vk_alloc.free_memory(&mut img_src_buf_alloc);
+            logical_device.destroy_buffer(img_src_buf, None);
+        };
+    }
 
     Ok((textures, texture_descriptors))
 }
@@ -1312,13 +1370,23 @@ fn setup_descriptors(
     vk::DescriptorSetLayout,
     vk::DescriptorSet,
     vk::DescriptorSetLayout,
+    vk::DescriptorPool,
 )> {
     let desc_variable_flag = vk::DescriptorBindingFlags::VARIABLE_DESCRIPTOR_COUNT;
 
-    let desc_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+    let texture_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
         binding_count: 1,
         p_binding_flags: &desc_variable_flag,
+        ..Default::default()
+    };
+
+    let desc_update_flag = vk::DescriptorBindingFlags::UPDATE_AFTER_BIND;
+
+    let shader_binding_flags = vk::DescriptorSetLayoutBindingFlagsCreateInfo {
+        s_type: StructureType::DESCRIPTOR_SET_LAYOUT_BINDING_FLAGS_CREATE_INFO,
+        binding_count: 1,
+        p_binding_flags: &desc_update_flag,
         ..Default::default()
     };
 
@@ -1342,16 +1410,18 @@ fn setup_descriptors(
 
     let shader_data_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
+        flags: vk::DescriptorSetLayoutCreateFlags::UPDATE_AFTER_BIND_POOL,
         binding_count: 1,
         p_bindings: &shader_data_binding,
+        p_next: &shader_binding_flags as *const _ as *const c_void,
         ..Default::default()
     };
 
     let texture_set_layout_create_info = vk::DescriptorSetLayoutCreateInfo {
         s_type: StructureType::DESCRIPTOR_SET_LAYOUT_CREATE_INFO,
-        p_next: &desc_binding_flags as *const _ as *const c_void,
         binding_count: 1,
         p_bindings: &texture_binding,
+        p_next: &texture_binding_flags as *const _ as *const c_void,
         ..Default::default()
     };
 
@@ -1379,6 +1449,7 @@ fn setup_descriptors(
 
     let pool_create_info = vk::DescriptorPoolCreateInfo {
         s_type: StructureType::DESCRIPTOR_POOL_CREATE_INFO,
+        flags: vk::DescriptorPoolCreateFlags::UPDATE_AFTER_BIND,
         max_sets: 2,
         pool_size_count: 2,
         p_pool_sizes: pool_sizes.as_ptr(),
@@ -1447,6 +1518,7 @@ fn setup_descriptors(
         shader_data_set_layout,
         texture_desc_set,
         texture_set_layout,
+        descriptor_pool,
     ))
 }
 
@@ -1615,6 +1687,7 @@ fn setup_pipeline(
     let raster_state = vk::PipelineRasterizationStateCreateInfo {
         s_type: StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         line_width: 1.0,
+        polygon_mode: vk::PolygonMode::FILL,
         ..Default::default()
     };
 
