@@ -1,4 +1,4 @@
-use tobj::{LoadError, LoadOptions, LoadResult};
+use tobj::LoadOptions;
 
 #[repr(C)]
 pub struct Vertex {
@@ -10,12 +10,11 @@ pub struct Vertex {
 pub fn load() -> (Vec<Vertex>, Vec<u16>) {
     let load_opts = LoadOptions::default();
     let load_res = tobj::load_obj("./assets/suzanne.obj", &load_opts).unwrap();
-    let (model, mat) = (load_res.0, load_res.1.unwrap());
+    let model = load_res.0;
 
     let model = &model[0];
 
     let model_indices = &model.mesh.indices;
-    let size = model_indices.len();
     let m_verts = &model.mesh.positions;
 
     let m_normals = &model.mesh.normals;

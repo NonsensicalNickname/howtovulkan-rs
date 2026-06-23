@@ -7,6 +7,7 @@ mod window;
 
 use model::Vertex;
 
+use inline_spirv::include_spirv;
 use window::AppWindow;
 
 use winit::{
@@ -20,7 +21,7 @@ use winit::{
 use std::{
     array,
     cell::RefCell,
-    ffi::{CStr, CString, c_char, c_void},
+    ffi::{CString, c_char, c_void},
     mem::offset_of,
     rc::Rc,
     sync::Arc,
@@ -272,15 +273,35 @@ fn main() {
         .expect("Could not initialise descriptors");
 
     println!("Loading shaders...");
-    let (vert_shader_module, frag_shader_module) =
-        shader::load_shader_module(&logical_device).expect("Could not load shaders");
+
+    let vert_shader_module = crate::include_shader_module!(
+        "shaders/shader.vert", vert, logical_device).expect("Could not load shader");
+
+    let frag_shader_module = crate::include_shader_module!(
+        "shaders/shader.frag", frag, logical_device).expect("Could not load shader");
+    
+    let wireframe_vert_shader_module = crate::include_shader_module!(
+        "shaders/wireframe.vert", vert, logical_device).expect("Could not load shader");
+
+    let wireframe_frag_shader_module = crate::include_shader_module!(
+        "shaders/wireframe.frag", frag, logical_device).expect("Could not load shader");
 
     println!("Creating graphics pipeline...");
-    let (pipeline, pipeline_layout) = setup_pipeline(
+    let (pipeline, pipeline_layout) = setup_main_pipeline(
         &logical_device,
         vert_shader_module,
         frag_shader_module,
         &[shader_data_set_layout, texture_set_layout],
+        image_format,
+        depth_format,
+    )
+    .expect("Could not set up the graphics pipeline");
+
+    let (wireframe_pipeline, wireframe_pipeline_layout) = setup_wireframe_pipeline(
+        &logical_device,
+        wireframe_vert_shader_module,
+        wireframe_frag_shader_module,
+        &[shader_data_set_layout],
         image_format,
         depth_format,
     )
@@ -472,6 +493,31 @@ fn main() {
                 pipeline_layout,
                 0,
                 &[shader_data_set, texture_set],
+                &[],
+            );
+
+            logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[buffer], &[v_offset]);
+            logical_device.cmd_bind_index_buffer(
+                command_buffer,
+                buffer,
+                v_buf_size as vk::DeviceSize,
+                vk::IndexType::UINT16,
+            );
+
+            logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+
+            logical_device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                wireframe_pipeline,
+            );
+
+            logical_device.cmd_bind_descriptor_sets(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                wireframe_pipeline_layout,
+                0,
+                &[shader_data_set],
                 &[],
             );
 
@@ -846,6 +892,7 @@ fn get_logical_device(
 
     let enabled_vk10_features = vk::PhysicalDeviceFeatures {
         sampler_anisotropy: vk::TRUE,
+        fill_mode_non_solid: vk::TRUE,
         ..Default::default()
     };
 
@@ -1563,7 +1610,7 @@ fn update_shader_data_descriptor(
     Ok(())
 }
 
-fn setup_pipeline(
+fn setup_main_pipeline(
     logical_device: &Device,
     vert_shader_module: vk::ShaderModule,
     frag_shader_module: vk::ShaderModule,
@@ -1573,7 +1620,7 @@ fn setup_pipeline(
 ) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
     let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
         s_type: StructureType::PIPELINE_LAYOUT_CREATE_INFO,
-        set_layout_count: 2,
+        set_layout_count: descriptor_set_layouts.len() as u32,
         p_set_layouts: descriptor_set_layouts.as_ptr(),
         ..Default::default()
     };
@@ -1721,6 +1768,167 @@ fn setup_pipeline(
                 .map_err(|e| e.1)?[0]
         },
         pipeline_layout,
+    ))
+}
+
+fn setup_wireframe_pipeline(
+    logical_device: &Device,
+    vert_shader_module: vk::ShaderModule,
+    frag_shader_module: vk::ShaderModule,
+    descriptor_set_layouts: &[vk::DescriptorSetLayout],
+    image_format: vk::Format,
+    depth_format: vk::Format,
+) -> VkResult<(vk::Pipeline, vk::PipelineLayout)> {
+    let pipeline_layout_create_info = vk::PipelineLayoutCreateInfo {
+        s_type: StructureType::PIPELINE_LAYOUT_CREATE_INFO,
+        set_layout_count: descriptor_set_layouts.len() as u32,
+        p_set_layouts: descriptor_set_layouts.as_ptr(),
+        ..Default::default()
+    };
+
+    let pipeline_layout =
+        unsafe { logical_device.create_pipeline_layout(&pipeline_layout_create_info, None)? };
+
+    let vertex_binding = vk::VertexInputBindingDescription {
+        binding: 0,
+        stride: size_of::<Vertex>() as u32,
+        input_rate: vk::VertexInputRate::VERTEX,
+    };
+
+    let vertex_attributes = [
+        vk::VertexInputAttributeDescription {
+            location: 0,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            ..Default::default()
+        },
+        vk::VertexInputAttributeDescription {
+            location: 1,
+            binding: 0,
+            format: vk::Format::R32G32B32_SFLOAT,
+            offset: offset_of!(Vertex, normal) as u32,
+        },
+        vk::VertexInputAttributeDescription {
+            location: 2,
+            binding: 0,
+            format: vk::Format::R32G32_SFLOAT,
+            offset: offset_of!(Vertex, uv) as u32,
+        },
+    ];
+
+    let vertex_input_state = vk::PipelineVertexInputStateCreateInfo {
+        s_type: StructureType::PIPELINE_VERTEX_INPUT_STATE_CREATE_INFO,
+        vertex_binding_description_count: 1,
+        p_vertex_binding_descriptions: &vertex_binding,
+        vertex_attribute_description_count: vertex_attributes.len() as u32,
+        p_vertex_attribute_descriptions: vertex_attributes.as_ptr(),
+        ..Default::default()
+    };
+
+    let input_assembly_state = vk::PipelineInputAssemblyStateCreateInfo {
+        s_type: StructureType::PIPELINE_INPUT_ASSEMBLY_STATE_CREATE_INFO,
+        topology: vk::PrimitiveTopology::TRIANGLE_LIST,
+        ..Default::default()
+    };
+
+    let shader_stages = vec![
+        vk::PipelineShaderStageCreateInfo {
+            s_type: StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage: vk::ShaderStageFlags::VERTEX,
+            module: vert_shader_module,
+            p_name: c"main".as_ptr(),
+            ..Default::default()
+        },
+        vk::PipelineShaderStageCreateInfo {
+            s_type: StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
+            stage: vk::ShaderStageFlags::FRAGMENT,
+            module: frag_shader_module,
+            p_name: c"main".as_ptr(),
+            ..Default::default()
+        },
+    ];
+
+    let viewport_state = vk::PipelineViewportStateCreateInfo {
+        s_type: StructureType::PIPELINE_VIEWPORT_STATE_CREATE_INFO,
+        viewport_count: 1,
+        scissor_count: 1,
+        ..Default::default()
+    };
+
+    let dynamic_states = [vk::DynamicState::VIEWPORT, vk::DynamicState::SCISSOR];
+
+    let dynamic_state = vk::PipelineDynamicStateCreateInfo {
+        s_type: StructureType::PIPELINE_DYNAMIC_STATE_CREATE_INFO,
+        dynamic_state_count: 2,
+        p_dynamic_states: dynamic_states.as_ptr(),
+        ..Default::default()
+    };
+
+    let depth_stencil_state = vk::PipelineDepthStencilStateCreateInfo {
+        s_type: StructureType::PIPELINE_DEPTH_STENCIL_STATE_CREATE_INFO,
+        depth_test_enable: vk::TRUE,
+        depth_write_enable: vk::TRUE,
+        depth_compare_op: vk::CompareOp::LESS_OR_EQUAL,
+        ..Default::default()
+    };
+
+    let rendering_create_info = vk::PipelineRenderingCreateInfo {
+        s_type: StructureType::PIPELINE_RENDERING_CREATE_INFO,
+        color_attachment_count: 1,
+        p_color_attachment_formats: &image_format,
+        depth_attachment_format: depth_format,
+        ..Default::default()
+    };
+
+    let blend_attachment = vk::PipelineColorBlendAttachmentState {
+        color_write_mask: vk::ColorComponentFlags::RGBA,
+        ..Default::default()
+    };
+
+    let colour_blend_state = vk::PipelineColorBlendStateCreateInfo {
+        s_type: StructureType::PIPELINE_COLOR_BLEND_STATE_CREATE_INFO,
+        attachment_count: 1,
+        p_attachments: &blend_attachment,
+        ..Default::default()
+    };
+
+    let raster_state = vk::PipelineRasterizationStateCreateInfo {
+        s_type: StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
+        line_width: 1.0,
+        polygon_mode: vk::PolygonMode::LINE,
+        ..Default::default()
+    };
+
+    let multisample_state = vk::PipelineMultisampleStateCreateInfo {
+        s_type: StructureType::PIPELINE_MULTISAMPLE_STATE_CREATE_INFO,
+        rasterization_samples: vk::SampleCountFlags::TYPE_1,
+        ..Default::default()
+    };
+
+    let pipeline_create_info = vk::GraphicsPipelineCreateInfo {
+        s_type: StructureType::GRAPHICS_PIPELINE_CREATE_INFO,
+        p_next: &rendering_create_info as *const _ as *const c_void,
+        stage_count: 2,
+        p_stages: shader_stages.as_ptr(),
+        p_vertex_input_state: &vertex_input_state,
+        p_input_assembly_state: &input_assembly_state,
+        p_viewport_state: &viewport_state,
+        p_rasterization_state: &raster_state,
+        p_multisample_state: &multisample_state,
+        p_depth_stencil_state: &depth_stencil_state,
+        p_color_blend_state: &colour_blend_state,
+        p_dynamic_state: &dynamic_state,
+        layout: pipeline_layout,
+        ..Default::default()
+    };
+
+    Ok((
+        unsafe {
+            logical_device
+                .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
+                .map_err(|e| e.1)?[0]
+        },
+        pipeline_layout
     ))
 }
 
