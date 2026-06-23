@@ -16,5 +16,5 @@ layout (location = 2) in vec2 UV;
 void main() {
     mat4 modelMat = shaderData.model[gl_InstanceIndex];
 
-    gl_Position = shaderData.projection * shaderData.view * modelMat * vec4(Pos.xyz + normalize(Normal) * 0.05, 1.0);
+    gl_Position = shaderData.projection * shaderData.view * modelMat * vec4(Pos.xyz, 1.0);
 }

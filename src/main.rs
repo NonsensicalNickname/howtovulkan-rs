@@ -284,12 +284,12 @@ fn main() {
         crate::include_shader_module!("shaders/shader.frag", frag, logical_device)
             .expect("Could not load shader");
 
-    let wireframe_vert_shader_module =
-        crate::include_shader_module!("shaders/wireframe.vert", vert, logical_device)
+    let outline_vert_shader_module =
+        crate::include_shader_module!("shaders/outline.vert", vert, logical_device)
             .expect("Could not load shader");
 
-    let wireframe_frag_shader_module =
-        crate::include_shader_module!("shaders/wireframe.frag", frag, logical_device)
+    let outline_frag_shader_module =
+        crate::include_shader_module!("shaders/outline.frag", frag, logical_device)
             .expect("Could not load shader");
 
     println!("Creating graphics pipeline...");
@@ -303,10 +303,10 @@ fn main() {
     )
     .expect("Could not set up the graphics pipeline");
 
-    let (wireframe_pipeline, wireframe_pipeline_layout) = setup_wireframe_pipeline(
+    let (outline_pipeline, outline_pipeline_layout) = setup_outline_pipeline(
         &logical_device,
-        wireframe_vert_shader_module,
-        wireframe_frag_shader_module,
+        outline_vert_shader_module,
+        outline_frag_shader_module,
         &[shader_data_set_layout],
         image_format,
         depth_format,
@@ -426,7 +426,7 @@ fn main() {
             store_op: vk::AttachmentStoreOp::STORE,
             clear_value: vk::ClearValue {
                 color: vk::ClearColorValue {
-                    float32: [0.0, 0.0, 0.0, 1.0],
+                    float32: [1.0, 1.0, 1.0, 1.0],
                 },
             },
             ..Default::default()
@@ -512,13 +512,16 @@ fn main() {
 
             logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
 
+            logical_device.cmd_bind_pipeline(
+                command_buffer,
+                vk::PipelineBindPoint::GRAPHICS,
+                outline_pipeline,
+            );
+
+            logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+
             if state.borrow().debug {
-                logical_device.cmd_bind_pipeline(
-                    command_buffer,
-                    vk::PipelineBindPoint::GRAPHICS,
-                    wireframe_pipeline,
-                );
-                logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+                // TODO: debug view pipeline
             }
 
             logical_device.cmd_end_rendering(command_buffer);
@@ -739,8 +742,8 @@ fn main() {
 
         logical_device.destroy_pipeline_layout(pipeline_layout, None);
         logical_device.destroy_pipeline(pipeline, None);
-        logical_device.destroy_pipeline_layout(wireframe_pipeline_layout, None);
-        logical_device.destroy_pipeline(wireframe_pipeline, None);
+        logical_device.destroy_pipeline_layout(outline_pipeline_layout, None);
+        logical_device.destroy_pipeline(outline_pipeline, None);
         swapchain_loader.destroy_swapchain(swapchain, None);
 
         surface_loader.destroy_surface(surface, None);
@@ -748,8 +751,8 @@ fn main() {
 
         logical_device.destroy_shader_module(vert_shader_module, None);
         logical_device.destroy_shader_module(frag_shader_module, None);
-        logical_device.destroy_shader_module(wireframe_vert_shader_module, None);
-        logical_device.destroy_shader_module(wireframe_frag_shader_module, None);
+        logical_device.destroy_shader_module(outline_vert_shader_module, None);
+        logical_device.destroy_shader_module(outline_frag_shader_module, None);
 
         logical_device.destroy_device(None);
         instance.destroy_instance(None);
@@ -888,6 +891,7 @@ fn get_logical_device(
     let enabled_vk10_features = vk::PhysicalDeviceFeatures {
         sampler_anisotropy: vk::TRUE,
         fill_mode_non_solid: vk::TRUE,
+        wide_lines: vk::TRUE,
         ..Default::default()
     };
 
@@ -1730,6 +1734,7 @@ fn setup_main_pipeline(
         s_type: StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
         line_width: 1.0,
         polygon_mode: vk::PolygonMode::FILL,
+        cull_mode: vk::CullModeFlags::BACK,
         ..Default::default()
     };
 
@@ -1766,7 +1771,7 @@ fn setup_main_pipeline(
     ))
 }
 
-fn setup_wireframe_pipeline(
+fn setup_outline_pipeline(
     logical_device: &Device,
     vert_shader_module: vk::ShaderModule,
     frag_shader_module: vk::ShaderModule,
@@ -1889,8 +1894,9 @@ fn setup_wireframe_pipeline(
 
     let raster_state = vk::PipelineRasterizationStateCreateInfo {
         s_type: StructureType::PIPELINE_RASTERIZATION_STATE_CREATE_INFO,
-        line_width: 1.0,
+        line_width: 5.0,
         polygon_mode: vk::PolygonMode::LINE,
+        cull_mode: vk::CullModeFlags::FRONT,
         ..Default::default()
     };
 
