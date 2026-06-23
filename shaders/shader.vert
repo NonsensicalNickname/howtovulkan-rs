@@ -7,6 +7,7 @@ layout (std140, set = 0, binding = 0) uniform ShaderData {
     mat4 model[3];
     vec4 lightPos;
     uint selected;
+    float shininess;
 } shaderData;
 
 layout (location = 0) in vec3 Pos; 
@@ -19,6 +20,7 @@ layout (location = 5) out vec3 outFactor;
 layout (location = 6) out vec3 outLightVec;
 layout (location = 7) out vec3 outViewVec;
 layout (location = 8) out uint outInstanceIndex;
+layout (location = 9) out float outShininess;
 
 
 void main() {
@@ -36,4 +38,5 @@ void main() {
     vec4 fragPos = shaderData.view * modelMat * vec4(Pos.xyz, 1.0);
     outLightVec = shaderData.lightPos.xyz - fragPos.xyz;
     outViewVec = -fragPos.xyz;
+    outShininess = shaderData.shininess;
 }

@@ -52,6 +52,7 @@ struct ShaderData {
     model: [nalgebra_glm::Mat4; 3],
     light_pos: nalgebra_glm::Vec4,
     selected: u32,
+    shininess: f32,
 }
 
 struct ShaderDataBuffer {
@@ -73,6 +74,7 @@ struct AppState<'a> {
     selected: u32,
     frame_time: f32,
     update_swapchain: bool,
+    shininess: f32,
     debug: bool,
 }
 
@@ -250,6 +252,7 @@ fn main() {
         selected: 1,
         frame_time: 16.0 / 1000.0,
         update_swapchain: false,
+        shininess: 16.0,
         debug: false,
     }));
 
@@ -1958,6 +1961,7 @@ fn calculate_shader_data(win_size: (u32, u32), state: &AppState) -> ShaderData {
         model,
         light_pos: nalgebra_glm::vec4(0.0, -10.0, 10.0, 0.0),
         selected: state.selected,
+        shininess: state.shininess,
     };
 
     sd

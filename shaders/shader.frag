@@ -12,16 +12,15 @@ layout (location = 5) in vec3 Factor;
 layout (location = 6) in vec3 LightVec;
 layout (location = 7) in vec3 ViewVec;
 layout (location = 8) flat in uint InstanceIndex;
+layout (location = 9) in float Shininess;
 
 void main() {
-    float shininess = 10.0;
-
     vec3 N = normalize(Normal);
     vec3 L = normalize(LightVec);
     vec3 V = normalize(ViewVec);
     vec3 R = reflect(-L, N);
     float diffuse = max(dot(N, L), 0.0);
-    float specular = pow(max(dot(R, V), 0.0), shininess) * 0.4;
+    float specular = pow(max(dot(R, V), 0.0), Shininess) * 0.4;
 
     vec3 colour = texture(textures[nonuniformEXT(InstanceIndex)], UV).rgb * Factor;
     vec3 outc = vec3(0.0);
