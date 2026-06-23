@@ -73,6 +73,7 @@ struct AppState<'a> {
     selected: u32,
     frame_time: f32,
     update_swapchain: bool,
+    debug: bool,
 }
 
 #[allow(unused)]
@@ -249,6 +250,7 @@ fn main() {
         selected: 1,
         frame_time: 16.0 / 1000.0,
         update_swapchain: false,
+        debug: false,
     }));
 
     let mut app = AppWindow::new(
@@ -274,17 +276,21 @@ fn main() {
 
     println!("Loading shaders...");
 
-    let vert_shader_module = crate::include_shader_module!(
-        "shaders/shader.vert", vert, logical_device).expect("Could not load shader");
+    let vert_shader_module =
+        crate::include_shader_module!("shaders/shader.vert", vert, logical_device)
+            .expect("Could not load shader");
 
-    let frag_shader_module = crate::include_shader_module!(
-        "shaders/shader.frag", frag, logical_device).expect("Could not load shader");
-    
-    let wireframe_vert_shader_module = crate::include_shader_module!(
-        "shaders/wireframe.vert", vert, logical_device).expect("Could not load shader");
+    let frag_shader_module =
+        crate::include_shader_module!("shaders/shader.frag", frag, logical_device)
+            .expect("Could not load shader");
 
-    let wireframe_frag_shader_module = crate::include_shader_module!(
-        "shaders/wireframe.frag", frag, logical_device).expect("Could not load shader");
+    let wireframe_vert_shader_module =
+        crate::include_shader_module!("shaders/wireframe.vert", vert, logical_device)
+            .expect("Could not load shader");
+
+    let wireframe_frag_shader_module =
+        crate::include_shader_module!("shaders/wireframe.frag", frag, logical_device)
+            .expect("Could not load shader");
 
     println!("Creating graphics pipeline...");
     let (pipeline, pipeline_layout) = setup_main_pipeline(
@@ -506,30 +512,14 @@ fn main() {
 
             logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
 
-            logical_device.cmd_bind_pipeline(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                wireframe_pipeline,
-            );
-
-            logical_device.cmd_bind_descriptor_sets(
-                command_buffer,
-                vk::PipelineBindPoint::GRAPHICS,
-                wireframe_pipeline_layout,
-                0,
-                &[shader_data_set],
-                &[],
-            );
-
-            logical_device.cmd_bind_vertex_buffers(command_buffer, 0, &[buffer], &[v_offset]);
-            logical_device.cmd_bind_index_buffer(
-                command_buffer,
-                buffer,
-                v_buf_size as vk::DeviceSize,
-                vk::IndexType::UINT16,
-            );
-
-            logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+            if state.borrow().debug {
+                logical_device.cmd_bind_pipeline(
+                    command_buffer,
+                    vk::PipelineBindPoint::GRAPHICS,
+                    wireframe_pipeline,
+                );
+                logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+            }
 
             logical_device.cmd_end_rendering(command_buffer);
         }
@@ -749,12 +739,17 @@ fn main() {
 
         logical_device.destroy_pipeline_layout(pipeline_layout, None);
         logical_device.destroy_pipeline(pipeline, None);
+        logical_device.destroy_pipeline_layout(wireframe_pipeline_layout, None);
+        logical_device.destroy_pipeline(wireframe_pipeline, None);
         swapchain_loader.destroy_swapchain(swapchain, None);
 
         surface_loader.destroy_surface(surface, None);
         logical_device.destroy_command_pool(command_pool, None);
-        logical_device.destroy_shader_module(frag_shader_module, None);
+
         logical_device.destroy_shader_module(vert_shader_module, None);
+        logical_device.destroy_shader_module(frag_shader_module, None);
+        logical_device.destroy_shader_module(wireframe_vert_shader_module, None);
+        logical_device.destroy_shader_module(wireframe_frag_shader_module, None);
 
         logical_device.destroy_device(None);
         instance.destroy_instance(None);
@@ -1928,7 +1923,7 @@ fn setup_wireframe_pipeline(
                 .create_graphics_pipelines(vk::PipelineCache::null(), &[pipeline_create_info], None)
                 .map_err(|e| e.1)?[0]
         },
-        pipeline_layout
+        pipeline_layout,
     ))
 }
 

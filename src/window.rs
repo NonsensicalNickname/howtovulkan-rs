@@ -92,6 +92,12 @@ impl ApplicationHandler for AppWindow<'_> {
                 (PhysicalKey::Code(KeyCode::Equal), event::ElementState::Pressed) => {
                     self.state.borrow_mut().cam_pos.z += 0.1;
                 }
+                (PhysicalKey::Code(KeyCode::KeyD), event::ElementState::Pressed) => {
+                    self.state.borrow_mut().debug = true;
+                }
+                (PhysicalKey::Code(KeyCode::KeyD), event::ElementState::Released) => {
+                    self.state.borrow_mut().debug = false;
+                }
                 (PhysicalKey::Code(KeyCode::KeyQ), event::ElementState::Pressed) => {
                     println!("Application closed");
                     event_loop.exit();

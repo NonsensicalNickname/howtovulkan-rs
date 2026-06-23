@@ -6,8 +6,9 @@ macro_rules! include_shader_module {
     ( $p:literal, $s:ident, $d:ident) => {
         unsafe {
             $d.create_shader_module(
-                &crate::shader::create_shader_info(
-                    include_spirv!($p, glsl, $s, vulkan1_2)), None)
+                &crate::shader::create_shader_info(include_spirv!($p, glsl, $s, vulkan1_2)),
+                None,
+            )
         }
     };
 }
