@@ -24,7 +24,7 @@ with a number of tweaks made as a result (+ Cel shading!).
 
 howtovulkan-rs uses [ash](https://docs.rs/ash), providing direct (almost) bindings to Vulkan.  
 
-[vk_format](), [gl_format](), and [extra_ktx]() contain constants and lookup functions for formats from libktx,
+[vk_format](./src/vk_format.rs), [gl_format](./src/gl_format.rs), and [extra_ktx](./src/extra_ktx.rs) contain constants and lookup functions for formats from libktx,
 as at time of writing, there are no maintained Rust crates providing bindings or either full support for the
 KTX format.   
 
@@ -39,13 +39,13 @@ NixOS (26.11, nixpkgs-unstable), with a discrete AMD GPU (rx 6800), and a Linux 
 
 ### Usage
 
-Run the appimage in the same directory as the model and shader directories. See [keybinds](###usage-(keybinds)).
+Run the appimage in the same directory as the model and shader directories. See [keybinds](#usage-keybinds).
 
 ### Dependencies
 
 Running the appimage only requires Vulkan drivers to be installed (e.g. vulkan-intel or vulkan-radeon on Arch), which 
-most systems should already have. vulkan-icd-loader is technically also required, but is likely installed automatically alongside 
-any Vulkan driver.
+most systems should already have. The Vulkan loader (vulkan-icd-loader on Arch) is technically also required, but is often installed 
+automatically alongside any Vulkan driver.
 
 ## Building and Running from Source
 
@@ -62,4 +62,4 @@ Running using cargo has the same requirements as running the appimage.
 
 ### Packaging
 
-A script (package.sh) is provided as a convenient means of producing a new appimage, and has the same requirements as building.
+A [packaging script](./package.sh) is provided as a convenient means of producing a new appimage, and has the same requirements as building.
