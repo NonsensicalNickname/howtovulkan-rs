@@ -1,5 +1,7 @@
 #!/bin/bash
 
+# Modified from https://docs.vulkan.org/tutorial/latest/Building_a_Simple_Engine/Tooling/06_packaging_and_distribution.html
+
 rm -rf AppDir
 rm howtovulkan-rs-x86_64.AppImage
 
@@ -23,7 +25,7 @@ cp -r shaders AppDir/usr/share/howtovulkan-rs/shaders
 
 cat > AppDir/usr/share/applications/com.github.nonsensicalnickname.howtovulkan-rs.desktop << EOF
 [Desktop Entry]
-Name=My Vulkan Application
+Name=howtovulkan-rs
 Exec=howtovulkan-rs
 Icon=howtovulkan-rs
 Type=Application

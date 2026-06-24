@@ -1,7 +1,10 @@
 [package]
 name = "howtovulkan-rs"
-version = "0.1.0"
+version = "1.0.0"
 edition = "2024"
+license = "GPL-3.0"
+repository = "https://codeberg.org/ceridwen15/howtovulkan-rs"
+readme = "README.md"
 
 [dependencies]
 ash = "0.38.0"
