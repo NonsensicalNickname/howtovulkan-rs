@@ -2,7 +2,7 @@
 
 ## Overview
 
-An implementation of the program described in [howtovulkan](https://howtovulkan.com) but in Rust and GLSL (vs C++ and Slang),
+An implementation of the simple renderer described in [howtovulkan](https://howtovulkan.com) but in Rust and GLSL (vs C++ and Slang),
 with a number of tweaks made as a result (+ Cel shading!).
 
 ### Changes made from howtovulkan
