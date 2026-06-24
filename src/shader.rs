@@ -1,5 +1,6 @@
 use ash::vk::{self, StructureType};
 
+#[allow(clippy::crate_in_macro_def)]
 #[macro_export]
 macro_rules! include_shader_module {
     // path, stage, device
@@ -13,10 +14,10 @@ macro_rules! include_shader_module {
     };
 }
 
-pub fn create_shader_info(spv: &[u32]) -> vk::ShaderModuleCreateInfo {
+pub fn create_shader_info(spv: &[u32]) -> vk::ShaderModuleCreateInfo<'_> {
     vk::ShaderModuleCreateInfo {
         s_type: StructureType::SHADER_MODULE_CREATE_INFO,
-        code_size: spv.len() * size_of::<u32>(),
+        code_size: std::mem::size_of_val(spv),
         p_code: spv.as_ptr(),
         ..Default::default()
     }

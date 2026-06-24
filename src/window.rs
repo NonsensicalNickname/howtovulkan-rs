@@ -43,7 +43,7 @@ impl<'a> AppWindow<'a> {
 impl AppWindow<'_> {
     fn rotate(&mut self, rhs: nalgebra_glm::Vec3) {
         let selected = self.state.borrow().selected;
-        let mut rot = &mut self.state.borrow_mut().obj_rotations[selected as usize];
+        let rot = &mut self.state.borrow_mut().obj_rotations[selected as usize];
         *rot += rhs;
     }
 }
@@ -66,9 +66,9 @@ impl ApplicationHandler for AppWindow<'_> {
                 self.state.borrow_mut().update_swapchain = true;
             }
             KeyboardInput {
-                device_id,
+                device_id: _,
                 event,
-                is_synthetic,
+                is_synthetic: _,
             } => match (event.physical_key, event.state) {
                 (PhysicalKey::Code(KeyCode::ArrowLeft), event::ElementState::Pressed) => {
                     let selected = &mut self.state.borrow_mut().selected;
@@ -100,12 +100,6 @@ impl ApplicationHandler for AppWindow<'_> {
                 (PhysicalKey::Code(KeyCode::Digit0), event::ElementState::Pressed) => {
                     self.state.borrow_mut().shininess += 0.5;
                 }
-                (PhysicalKey::Code(KeyCode::KeyD), event::ElementState::Pressed) => {
-                    self.state.borrow_mut().debug = true;
-                }
-                (PhysicalKey::Code(KeyCode::KeyD), event::ElementState::Released) => {
-                    self.state.borrow_mut().debug = false;
-                }
                 (PhysicalKey::Code(KeyCode::KeyQ), event::ElementState::Pressed) => {
                     println!("Application closed");
                     event_loop.exit();
@@ -113,17 +107,15 @@ impl ApplicationHandler for AppWindow<'_> {
                 _ => (),
             },
             MouseWheel {
-                device_id,
-                delta,
-                phase,
+                device_id: _,
+                delta: event::MouseScrollDelta::LineDelta(_, y),
+                phase: _,
             } => {
-                if let event::MouseScrollDelta::LineDelta(_, y) = delta {
-                    let factor = self.state.borrow().frame_time * 10.0;
-                    self.state.borrow_mut().cam_pos.z += y * factor;
-                }
+                let factor = self.state.borrow().frame_time * 10.0;
+                self.state.borrow_mut().cam_pos.z += y * factor;
             }
             MouseInput {
-                device_id,
+                device_id: _,
                 state,
                 button,
             } => {

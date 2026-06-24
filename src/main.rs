@@ -36,7 +36,7 @@ use ash::{
 
 use vk_mem::Alloc;
 
-use extra_ktx::ktxTexture_GetOffset;
+use crate::extra_ktx::ktx_texture_get_offset;
 use ktx::{Ktx, KtxInfo, include_ktx};
 
 // check with show_physical_device_names
@@ -228,7 +228,7 @@ fn main() {
 
     unsafe { vk_alloc.unmap_memory(&mut buffer_alloc) }
 
-    let mut shader_data_buffer = init_shader_buffer(&vk_alloc, &logical_device);
+    let mut shader_data_buffer = init_shader_buffer(&vk_alloc);
 
     let mut render_semaphores = Vec::<vk::Semaphore>::with_capacity(swapchain_images.len());
 
@@ -627,7 +627,7 @@ fn main() {
                 (ls.width, ls.height)
             };
 
-            swapchain_create_info.old_swapchain = swapchain.clone();
+            swapchain_create_info.old_swapchain = swapchain;
             swapchain_create_info.image_extent = vk::Extent2D {
                 width: win_size.0,
                 height: win_size.1,
@@ -919,7 +919,7 @@ fn create_swapchain<'a>(
     image_format: vk::Format,
 ) -> VkResult<(vk::SwapchainKHR, Vec<vk::Image>, Vec<vk::ImageView>)> {
     unsafe {
-        let swapchain = swapchain_loader.create_swapchain(&swapchain_create_info, None)?;
+        let swapchain = swapchain_loader.create_swapchain(swapchain_create_info, None)?;
         let swapchain_images = swapchain_loader.get_swapchain_images(swapchain).unwrap();
         let swapchain_image_views = swapchain_images
             .iter()
@@ -1060,7 +1060,7 @@ fn get_buffer(
     Ok(unsafe { vk_alloc.create_buffer(&buffer_info, &alloc_info)? })
 }
 
-fn init_shader_buffer(vk_alloc: &vk_mem::Allocator, logical_device: &Device) -> ShaderDataBuffer {
+fn init_shader_buffer(vk_alloc: &vk_mem::Allocator) -> ShaderDataBuffer {
     let buffer_info = vk::BufferCreateInfo {
         s_type: StructureType::BUFFER_CREATE_INFO,
         size: size_of::<ShaderData>() as u64,
@@ -1118,7 +1118,7 @@ fn init_sync_objects<'a>(
 
     render_semaphores.resize(n_swapchain_images, vk::Semaphore::null());
 
-    for mut semaphore in &mut render_semaphores {
+    for semaphore in &mut render_semaphores {
         *semaphore = unsafe { logical_device.create_semaphore(&semaphore_create_info, None) }?;
     }
 
@@ -1305,7 +1305,7 @@ fn load_tex(
         let mut copy_regions: Vec<vk::BufferImageCopy> = Vec::new();
 
         for i in 0..tex.mipmap_levels() {
-            if let Some(mip_offset) = ktxTexture_GetOffset(tex, i, 0, 0) {
+            if let Some(mip_offset) = ktx_texture_get_offset(tex, i, 0, 0) {
                 copy_regions.push(vk::BufferImageCopy {
                     buffer_offset: mip_offset,
                     image_subresource: vk::ImageSubresourceLayers {
@@ -1411,8 +1411,8 @@ fn load_tex(
 
 fn setup_descriptors(
     logical_device: &Device,
-    textures: &Vec<Texture>,
-    texture_descriptors: &Vec<vk::DescriptorImageInfo>,
+    textures: &[Texture],
+    texture_descriptors: &[vk::DescriptorImageInfo],
     shader_data_buffer: &ShaderDataBuffer,
 ) -> VkResult<(
     vk::DescriptorSet,
@@ -1487,12 +1487,10 @@ fn setup_descriptors(
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::UNIFORM_BUFFER,
             descriptor_count: 1,
-            ..Default::default()
         },
         vk::DescriptorPoolSize {
             ty: vk::DescriptorType::COMBINED_IMAGE_SAMPLER,
             descriptor_count: textures.len() as u32,
-            ..Default::default()
         },
     ];
 
@@ -1512,7 +1510,7 @@ fn setup_descriptors(
     let variable_desc_count_alloc_info = vk::DescriptorSetVariableDescriptorCountAllocateInfo {
         s_type: StructureType::DESCRIPTOR_SET_VARIABLE_DESCRIPTOR_COUNT_ALLOCATE_INFO,
         descriptor_set_count: 2,
-        p_descriptor_counts: (&[1, variable_desc_count]).as_ptr(),
+        p_descriptor_counts: ([1, variable_desc_count]).as_ptr(),
         ..Default::default()
     };
 
@@ -1672,7 +1670,7 @@ fn setup_main_pipeline(
         ..Default::default()
     };
 
-    let shader_stages = vec![
+    let shader_stages = [
         vk::PipelineShaderStageCreateInfo {
             s_type: StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
             stage: vk::ShaderStageFlags::VERTEX,
@@ -1834,7 +1832,7 @@ fn setup_outline_pipeline(
         ..Default::default()
     };
 
-    let shader_stages = vec![
+    let shader_stages = [
         vk::PipelineShaderStageCreateInfo {
             s_type: StructureType::PIPELINE_SHADER_STAGE_CREATE_INFO,
             stage: vk::ShaderStageFlags::VERTEX,
@@ -1955,16 +1953,14 @@ fn calculate_shader_data(win_size: (u32, u32), state: &AppState) -> ShaderData {
         nalgebra_glm::rotate_z(&rot_y, state.obj_rotations[idx].z)
     });
 
-    let sd = ShaderData {
+    ShaderData {
         proj,
         view,
         model,
         light_pos: nalgebra_glm::vec4(0.0, -10.0, 10.0, 0.0),
         selected: state.selected,
         shininess: state.shininess,
-    };
-
-    sd
+    }
 }
 
 // TODO: alongside a flag for this, add option to manually set device

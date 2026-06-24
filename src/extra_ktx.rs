@@ -1,6 +1,6 @@
 use ktx::{Ktx, KtxInfo};
 
-pub fn ktxTexture_GetOffset(
+pub fn ktx_texture_get_offset(
     tex: Ktx<&[u8]>,
     level: u32,
     layer: u32,
