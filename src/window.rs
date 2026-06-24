@@ -93,7 +93,9 @@ impl ApplicationHandler for AppWindow<'_> {
                     self.state.borrow_mut().cam_pos.z += 0.1;
                 }
                 (PhysicalKey::Code(KeyCode::Digit9), event::ElementState::Pressed) => {
-                    self.state.borrow_mut().shininess -= 0.5;
+                    if self.state.borrow().shininess >= 0.5 {
+                        self.state.borrow_mut().shininess -= 0.5;
+                    }
                 }
                 (PhysicalKey::Code(KeyCode::Digit0), event::ElementState::Pressed) => {
                     self.state.borrow_mut().shininess += 0.5;
