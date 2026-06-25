@@ -43,13 +43,14 @@ use ktx::{Ktx, KtxInfo, include_ktx};
 const PHYSICAL_DEVICE_IDX: usize = 0;
 const DISPLAY_SCALING: f64 = 1.0;
 const MAX_FRAMES_IN_FLIGHT: usize = 2;
+const N_MODELS: usize = 5;
 
 #[repr(C)]
 #[derive(Debug)]
 struct ShaderData {
     proj: nalgebra_glm::Mat4,
     view: nalgebra_glm::Mat4,
-    model: [nalgebra_glm::Mat4; 3],
+    model: [nalgebra_glm::Mat4; N_MODELS],
     light_pos: nalgebra_glm::Vec4,
     selected: u32,
     shininess: f32,
@@ -70,7 +71,7 @@ struct Texture {
 
 struct AppState<'a> {
     cam_pos: &'a mut nalgebra_glm::Vec3,
-    obj_rotations: &'a mut [nalgebra_glm::Vec3; 3],
+    obj_rotations: &'a mut [nalgebra_glm::Vec3; N_MODELS],
     selected: u32,
     frame_time: f32,
     update_swapchain: bool,
@@ -243,13 +244,13 @@ fn main() {
     let (mut command_pool, mut command_buffers) = create_command_buffers(&logical_device, qf_idx)
         .expect("Could not create command pool or buffers");
 
-    let mut cam_pos = nalgebra_glm::vec3(0.0, 0.0, -6.0);
-    let mut obj_rotations = [nalgebra_glm::vec3(0.0, 0.0, 0.0); 3];
+    let mut cam_pos = nalgebra_glm::vec3(0.0, 0.0, -2.0 * N_MODELS as f32);
+    let mut obj_rotations = [nalgebra_glm::vec3(0.0, 0.0, 0.0); N_MODELS];
 
     let mut state = Rc::new(RefCell::new(AppState {
         cam_pos: &mut cam_pos,
         obj_rotations: &mut obj_rotations,
-        selected: 1,
+        selected: 0,
         frame_time: 16.0 / 1000.0,
         update_swapchain: false,
         shininess: 16.0,
@@ -513,7 +514,7 @@ fn main() {
                 vk::IndexType::UINT16,
             );
 
-            logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+            logical_device.cmd_draw_indexed(command_buffer, index_count, N_MODELS as u32, 0, 0, 0);
 
             logical_device.cmd_bind_pipeline(
                 command_buffer,
@@ -521,7 +522,7 @@ fn main() {
                 outline_pipeline,
             );
 
-            logical_device.cmd_draw_indexed(command_buffer, index_count, 3, 0, 0, 0);
+            logical_device.cmd_draw_indexed(command_buffer, index_count, N_MODELS as u32, 0, 0, 0);
 
             if state.borrow().debug {
                 // TODO: debug view pipeline
@@ -1163,11 +1164,15 @@ fn load_tex(
     command_pool: vk::CommandPool,
     queue: vk::Queue,
 ) -> VkResult<(Vec<Texture>, Vec<vk::DescriptorImageInfo>)> {
-    let texture_files: Vec<Ktx<_>> = vec![
-        include_ktx!("../assets/suzanne0.ktx"),
-        include_ktx!("../assets/suzanne1.ktx"),
-        include_ktx!("../assets/suzanne2.ktx"),
-    ];
+    let texture_files: [Ktx<_>; N_MODELS] = array::from_fn(|idx| {
+        let n = idx + 1;
+
+        match (n % 2 == 0, n % 3 == 0) {
+            (true, false) => include_ktx!("../assets/suzanne1.ktx"),
+            (_, true) => include_ktx!("../assets/suzanne2.ktx"),
+            _ => include_ktx!("../assets/suzanne0.ktx"),
+        }
+    });
 
     let mut textures: Vec<Texture> = Vec::new();
     let mut texture_descriptors: Vec<vk::DescriptorImageInfo> = Vec::new();
@@ -1944,8 +1949,13 @@ fn calculate_shader_data(win_size: (u32, u32), state: &AppState) -> ShaderData {
 
     let view = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), state.cam_pos);
 
-    let model: [nalgebra_glm::Mat4; 3] = array::from_fn(|idx| {
-        let instance_pos = nalgebra_glm::vec3((idx as f32 - 1.0) * 3.0, 0.0, 0.0);
+    let model: [nalgebra_glm::Mat4; N_MODELS] = array::from_fn(|idx| {
+        let offset = if N_MODELS == 1 { 0.0 } 
+        else { 
+            (idx as f32 - (N_MODELS - 1) as f32 / 2.0) * 3.0 
+        };
+
+        let instance_pos = nalgebra_glm::vec3(offset, 0.0, 0.0);
 
         let before_rot = nalgebra_glm::translate(&nalgebra_glm::Mat4::identity(), &instance_pos);
         let rot_x = nalgebra_glm::rotate_x(&before_rot, state.obj_rotations[idx].x);

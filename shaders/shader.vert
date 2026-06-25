@@ -4,7 +4,7 @@
 layout (std140, set = 0, binding = 0) uniform ShaderData {
     mat4 projection;
     mat4 view;
-    mat4 model[3];
+    mat4 model[5];
     vec4 lightPos;
     uint selected;
     float shininess;

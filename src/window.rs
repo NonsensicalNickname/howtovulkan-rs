@@ -73,14 +73,14 @@ impl ApplicationHandler for AppWindow<'_> {
                 (PhysicalKey::Code(KeyCode::ArrowLeft), event::ElementState::Pressed) => {
                     let selected = &mut self.state.borrow_mut().selected;
                     if *selected == 0 {
-                        *selected = 2;
+                        *selected = crate::N_MODELS as u32 - 1;
                     } else {
                         *selected -= 1;
                     }
                 }
                 (PhysicalKey::Code(KeyCode::ArrowRight), event::ElementState::Pressed) => {
                     let selected = &mut self.state.borrow_mut().selected;
-                    if *selected == 2 {
+                    if *selected == crate::N_MODELS as u32 - 1 {
                         *selected = 0;
                     } else {
                         *selected += 1;
