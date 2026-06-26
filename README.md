@@ -5,6 +5,11 @@
 An implementation of the simple renderer described in [howtovulkan](https://howtovulkan.com) but in Rust and GLSL (vs C++ and Slang),
 with a number of tweaks made as a result (+ Cel shading!).
 
+In other words, howtovulkan-rs is a demo program using Vulkan to render single objects to a winit surface, with basic view controls. 
+See [keybinds](#usage-keybinds). 
+
+![Demo screenshot](./screenshot.png)
+
 ### Changes made from howtovulkan
 
  - GLSL instead of Slang (and thus a UBO is used instead of a push constant for sending extra data to the vertex shader)
